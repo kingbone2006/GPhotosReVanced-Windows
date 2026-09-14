@@ -16,6 +16,7 @@ from core.auth import ConfigManager
 from core.db import UploadDatabase
 from core.uploader import PhotoUploader, SUPPORTED_EXTENSIONS
 from core.watcher import FolderWatcher
+from core.i18n import set_language, get_language, t
 from ui.dialogs import LoginDialog, AccountManagerDialog, UnbackupDialog
 from ui.upload_tray import ActiveUploadTray
 

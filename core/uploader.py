@@ -8,8 +8,7 @@ import time
 import threading
 from pathlib import Path
 from queue import Queue, Empty
-from typing import Optional, Callable, Dict, Any, List
-
+from typing import Optional, Callable, Dict, Any, List, Sequence, Tuple
 import requests
 import gpmc
 from gpmc.client import UploadProgressEvent

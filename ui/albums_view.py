@@ -1,7 +1,7 @@
 """Cloud Albums and Photos Explorer for Google Photos ReVanced Windows.
 Provides full desktop album management:
-- View albums with cover art and photo counts
-- Instant search/filter by album name
+- View all photos or albums with cover art and photo counts
+- Instant search/filter by album or photo name
 - Bulk 'Select All' checkbox
 - Download albums to PC into folders named after the album name
 - Browse and preview individual photos inside each album
@@ -23,7 +23,7 @@ from ui.upload_tray import get_file_thumbnail
 class AlbumsView(ctk.CTkFrame):
     """
     Main container for Albums & Photos Explorer tab.
-    Supports switching between Albums Grid and Photo Grid inside a selected album.
+    Supports switching between Albums Grid, Photos Grid, and Album Detail view.
     """
     def __init__(self, parent, db: UploadDatabase, config_mgr, get_uploader_func=None):
         super().__init__(parent, fg_color="transparent")
@@ -36,6 +36,7 @@ class AlbumsView(ctk.CTkFrame):
         self._selected_album_names: set = set()
         self._current_viewing_album: Optional[str] = None
         self._downloader: Optional[AlbumDownloader] = None
+        self._active_mode = "albums"  # "albums" or "photos"
 
         # Build UI Structure
         self._build_header()
@@ -44,7 +45,7 @@ class AlbumsView(ctk.CTkFrame):
         self.content_container = ctk.CTkFrame(self, fg_color="transparent")
         self.content_container.pack(fill="both", expand=True, padx=12, pady=(4, 8))
 
-        # 1. Album Grid Container
+        # 1. Main Grid Container
         self.albums_scroll = ctk.CTkScrollableFrame(
             self.content_container,
             fg_color="#18181b",
@@ -63,15 +64,28 @@ class AlbumsView(ctk.CTkFrame):
         self.header_frame = ctk.CTkFrame(self, fg_color="#27272a", corner_radius=10)
         self.header_frame.pack(fill="x", padx=12, pady=(8, 4))
 
-        # Row 1: Search & Controls
-        row1 = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        row1.pack(fill="x", padx=12, pady=10)
+        # Top Switcher: Albums vs All Photos
+        top_row = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=12, pady=(8, 2))
+
+        self.seg_view = ctk.CTkSegmentedButton(
+            top_row,
+            values=["📁 Xem Album", "🖼️ Xem Tất Cả Ảnh"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_switch_view_mode
+        )
+        self.seg_view.pack(side="left")
+        self.seg_view.set("📁 Xem Album")
+
+        # Row 2: Search & Controls
+        self.controls_row = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        self.controls_row.pack(fill="x", padx=12, pady=(4, 10))
 
         # Search Bar
         self.search_entry = ctk.CTkEntry(
-            row1,
+            self.controls_row,
             placeholder_text=t("albums_search_placeholder"),
-            width=320,
+            width=300,
             height=32,
             font=ctk.CTkFont(size=12)
         )
@@ -80,7 +94,7 @@ class AlbumsView(ctk.CTkFrame):
 
         # Select All Checkbox
         self.chk_select_all = ctk.CTkCheckBox(
-            row1,
+            self.controls_row,
             text=t("albums_select_all"),
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._on_toggle_select_all
@@ -89,7 +103,7 @@ class AlbumsView(ctk.CTkFrame):
 
         # Selected Counter
         self.lbl_selected_counter = ctk.CTkLabel(
-            row1,
+            self.controls_row,
             text=t("albums_selected_count", count=0, total=0),
             font=ctk.CTkFont(size=11),
             text_color="#a1a1aa"
@@ -98,7 +112,7 @@ class AlbumsView(ctk.CTkFrame):
 
         # Download Selected Button
         self.btn_download_selected = ctk.CTkButton(
-            row1,
+            self.controls_row,
             text=t("btn_download_selected_albums", count=0),
             fg_color="#2563eb",
             hover_color="#1d4ed8",
@@ -110,7 +124,7 @@ class AlbumsView(ctk.CTkFrame):
 
         # Refresh Button
         self.btn_refresh = ctk.CTkButton(
-            row1,
+            self.controls_row,
             text=t("btn_refresh_albums"),
             fg_color="#3f3f46",
             hover_color="#52525b",
@@ -120,9 +134,24 @@ class AlbumsView(ctk.CTkFrame):
         )
         self.btn_refresh.pack(side="right", padx=6)
 
+    def _on_switch_view_mode(self, mode: str):
+        if "Ảnh" in mode:
+            self._active_mode = "photos"
+            self.chk_select_all.pack_forget()
+            self.lbl_selected_counter.pack_forget()
+            self.btn_download_selected.pack_forget()
+            self.search_entry.configure(placeholder_text="🔍 Tìm ảnh theo tên file...")
+            self._render_all_photos_grid()
+        else:
+            self._active_mode = "albums"
+            self.chk_select_all.pack(side="left", padx=8)
+            self.lbl_selected_counter.pack(side="left", padx=8)
+            self.btn_download_selected.pack(side="right", padx=(6, 0))
+            self.search_entry.configure(placeholder_text=t("albums_search_placeholder"))
+            self._render_album_grid()
+
     def _build_photos_viewer_ui(self):
         """Header and scroll area for viewing photos inside an album."""
-        # Top navigation bar
         p_header = ctk.CTkFrame(self.photos_container, fg_color="#27272a", corner_radius=8)
         p_header.pack(fill="x", padx=12, pady=10)
 
@@ -173,6 +202,10 @@ class AlbumsView(ctk.CTkFrame):
         self._on_search()
 
     def _on_search(self):
+        if self._active_mode == "photos":
+            self._render_all_photos_grid()
+            return
+
         query = self.search_entry.get().strip().lower()
         if not query:
             self._filtered_albums = list(self._all_albums)
@@ -183,12 +216,10 @@ class AlbumsView(ctk.CTkFrame):
         self._render_album_grid()
 
     def _render_album_grid(self):
-        # Clear existing cards
         for widget in self.albums_scroll.winfo_children():
             widget.destroy()
 
         total = len(self._all_albums)
-        shown = len(self._filtered_albums)
         sel = len(self._selected_album_names)
         self.lbl_selected_counter.configure(
             text=t("albums_selected_count", count=sel, total=total)
@@ -208,7 +239,6 @@ class AlbumsView(ctk.CTkFrame):
             lbl_empty.pack(expand=True, pady=60)
             return
 
-        # Grid layout (3-4 columns)
         cols = 3
         for idx, album in enumerate(self._filtered_albums):
             album_name = album.get("album_name", "Untitled")
@@ -222,7 +252,6 @@ class AlbumsView(ctk.CTkFrame):
             card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
             self.albums_scroll.grid_columnconfigure(col, weight=1)
 
-            # Card Header: Checkbox + Title
             top_bar = ctk.CTkFrame(card, fg_color="transparent")
             top_bar.pack(fill="x", padx=10, pady=(10, 4))
 
@@ -249,7 +278,6 @@ class AlbumsView(ctk.CTkFrame):
             lbl_title.pack(side="left", fill="x", expand=True, padx=4)
             lbl_title.bind("<Button-1>", lambda e, name=album_name: self._open_album_photos(name))
 
-            # Cover Thumbnail Container
             thumb_box = ctk.CTkFrame(card, height=110, fg_color="#18181b", corner_radius=8)
             thumb_box.pack(fill="x", padx=10, pady=4)
             thumb_box.pack_propagate(False)
@@ -263,7 +291,6 @@ class AlbumsView(ctk.CTkFrame):
                 if thumb:
                     lbl_cover.configure(image=thumb, text="")
 
-            # Bottom info & action buttons
             bottom_bar = ctk.CTkFrame(card, fg_color="transparent")
             bottom_bar.pack(fill="x", padx=10, pady=(4, 10))
 
@@ -299,6 +326,73 @@ class AlbumsView(ctk.CTkFrame):
             )
             btn_dl.pack(side="right")
 
+    def _render_all_photos_grid(self):
+        """Render all backed-up photos in a responsive gallery stream."""
+        for widget in self.albums_scroll.winfo_children():
+            widget.destroy()
+
+        active_acc = self.config_mgr.get_active_account()
+        email = active_acc.get("email", "") if active_acc else ""
+        photos = self.db.get_all_photos(email)
+
+        query = self.search_entry.get().strip().lower()
+        if query:
+            photos = [p for p in photos if query in p.get("filename", "").lower()]
+
+        if not photos:
+            lbl_empty = ctk.CTkLabel(
+                self.albums_scroll,
+                text="Chưa có ảnh nào được sao lưu.",
+                font=ctk.CTkFont(size=13),
+                text_color="#71717a"
+            )
+            lbl_empty.pack(expand=True, pady=60)
+            return
+
+        cols = 4
+        for idx, photo in enumerate(photos):
+            filename = photo.get("filename", "photo.jpg")
+            local_path = photo.get("local_path", "")
+            fsize = photo.get("file_size", 0)
+            mb = fsize / (1024 * 1024)
+
+            row = idx // cols
+            col = idx % cols
+
+            p_card = ctk.CTkFrame(self.albums_scroll, fg_color="#27272a", corner_radius=8)
+            p_card.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+            self.albums_scroll.grid_columnconfigure(col, weight=1)
+
+            t_box = ctk.CTkFrame(p_card, height=110, fg_color="#18181b", corner_radius=6)
+            t_box.pack(fill="x", padx=6, pady=(6, 2))
+            t_box.pack_propagate(False)
+
+            lbl_img = ctk.CTkLabel(t_box, text="📷", font=ctk.CTkFont(size=24), cursor="hand2")
+            lbl_img.place(relx=0.5, rely=0.5, anchor="center")
+
+            if local_path and Path(local_path).exists():
+                lbl_img.bind("<Double-Button-1>", lambda e, p=local_path: self._open_file_system(p))
+                t_img = get_file_thumbnail(Path(local_path), size=(120, 100))
+                if t_img:
+                    lbl_img.configure(image=t_img, text="")
+
+            disp_fname = filename if len(filename) <= 18 else filename[:14] + "..." + Path(filename).suffix
+            ctk.CTkLabel(
+                p_card,
+                text=disp_fname,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color="#f4f4f5",
+                anchor="w"
+            ).pack(fill="x", padx=6, pady=(2, 0))
+
+            ctk.CTkLabel(
+                p_card,
+                text=f"{mb:.1f} MB",
+                font=ctk.CTkFont(size=9),
+                text_color="#9ca3af",
+                anchor="w"
+            ).pack(fill="x", padx=6, pady=(0, 6))
+
     def _toggle_album_selection(self, album_name: str):
         if album_name in self._selected_album_names:
             self._selected_album_names.remove(album_name)
@@ -326,7 +420,7 @@ class AlbumsView(ctk.CTkFrame):
         self._render_album_grid()
 
     # =========================================================================
-    # Album Photos View Mode
+    # Album Detail Photos View Mode
     # =========================================================================
     def _open_album_photos(self, album_name: str):
         self._current_viewing_album = album_name
@@ -341,7 +435,6 @@ class AlbumsView(ctk.CTkFrame):
             text=f"📁 {album_name} ({len(photos)} ảnh)"
         )
 
-        # Clear existing photo cards
         for widget in self.photos_scroll.winfo_children():
             widget.destroy()
 
@@ -369,7 +462,6 @@ class AlbumsView(ctk.CTkFrame):
             p_card.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
             self.photos_scroll.grid_columnconfigure(col, weight=1)
 
-            # Thumbnail
             t_box = ctk.CTkFrame(p_card, height=110, fg_color="#18181b", corner_radius=6)
             t_box.pack(fill="x", padx=6, pady=(6, 2))
             t_box.pack_propagate(False)
@@ -383,7 +475,6 @@ class AlbumsView(ctk.CTkFrame):
                 if t_img:
                     lbl_img.configure(image=t_img, text="")
 
-            # Filename & Size
             disp_fname = filename if len(filename) <= 18 else filename[:14] + "..." + Path(filename).suffix
             ctk.CTkLabel(
                 p_card,
@@ -402,7 +493,6 @@ class AlbumsView(ctk.CTkFrame):
             ).pack(fill="x", padx=6, pady=(0, 6))
 
     def _open_file_system(self, file_path: str):
-        """Open photo in default system viewer."""
         try:
             os.startfile(file_path)
         except Exception:
@@ -438,7 +528,6 @@ class AlbumsView(ctk.CTkFrame):
         active_acc = self.config_mgr.get_active_account()
         email = active_acc.get("email", "") if active_acc else ""
 
-        # Prepare payload
         payload = []
         for name in album_names:
             photos = self.db.get_album_photos(name, email)
@@ -447,14 +536,12 @@ class AlbumsView(ctk.CTkFrame):
                 "items": photos
             })
 
-        # Get gpmc API client if available
         api_client = None
         if self.get_uploader:
             uploader = self.get_uploader()
             if uploader and uploader._client:
                 api_client = uploader._client.api
 
-        # Create Progress Dialog
         dlg = DownloadProgressDialog(self.winfo_toplevel(), album_names, dest_root)
 
         downloader = AlbumDownloader(api=api_client)

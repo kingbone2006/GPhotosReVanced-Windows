@@ -575,3 +575,15 @@ class UploadDatabase:
 
         return photos
 
+    def get_all_photos(self, account_email: str = "", limit: int = 500) -> List[Dict[str, Any]]:
+        """Retrieve all backed up photos for browsing in Photo Gallery."""
+        with self._get_connection() as conn:
+            query = """
+            SELECT filename, local_path, media_key, file_size, uploaded_at
+            FROM uploads
+            WHERE status = 'success' AND (account_email = ? OR account_email = '' OR account_email IS NULL)
+            ORDER BY id DESC LIMIT ?
+            """
+            rows = conn.execute(query, (account_email, limit)).fetchall()
+            return [dict(r) for r in rows]
+

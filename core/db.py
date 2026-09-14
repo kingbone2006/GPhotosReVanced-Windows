@@ -463,3 +463,115 @@ class UploadDatabase:
                 conn.commit()
             self._fast_cache = None
 
+    def get_all_albums(self, account_email: str = "") -> List[Dict[str, Any]]:
+        """
+        Get all albums with their photo count and cover thumbnail info.
+        Combines registered albums and folder-based albums from uploads.
+        """
+        albums_dict = {}
+        with self._get_connection() as conn:
+            # 1. Registered albums in albums table
+            q_alb = "SELECT album_name, album_media_key, created_at FROM albums WHERE (account_email = ? OR account_email = '' OR account_email IS NULL)"
+            for row in conn.execute(q_alb, (account_email,)).fetchall():
+                name = row["album_name"]
+                albums_dict[name] = {
+                    "album_name": name,
+                    "album_media_key": row["album_media_key"],
+                    "created_at": row["created_at"],
+                    "photo_count": 0,
+                    "cover_path": "",
+                    "cover_media_key": "",
+                }
+
+            # 2. Add counts from album_items
+            q_items = "SELECT album_name, COUNT(DISTINCT media_key) as cnt, MIN(media_key) as cover_key FROM album_items WHERE (account_email = ? OR account_email = '' OR account_email IS NULL) GROUP BY album_name"
+            for row in conn.execute(q_items, (account_email,)).fetchall():
+                name = row["album_name"]
+                if name in albums_dict:
+                    albums_dict[name]["photo_count"] = row["cnt"]
+                    albums_dict[name]["cover_media_key"] = row["cover_key"]
+                else:
+                    albums_dict[name] = {
+                        "album_name": name,
+                        "album_media_key": "",
+                        "created_at": "",
+                        "photo_count": row["cnt"],
+                        "cover_path": "",
+                        "cover_media_key": row["cover_key"],
+                    }
+
+            # 3. Discover folder-based albums from uploads table
+            q_uploads = "SELECT local_path, filename, media_key FROM uploads WHERE status = 'success' AND (account_email = ? OR account_email = '' OR account_email IS NULL)"
+            for row in conn.execute(q_uploads, (account_email,)).fetchall():
+                p_str = row["local_path"]
+                if not p_str:
+                    continue
+                p = Path(p_str)
+                parent_name = p.parent.name
+                if not parent_name or parent_name in (".", "/", "\\"):
+                    continue
+                if parent_name not in albums_dict:
+                    albums_dict[parent_name] = {
+                        "album_name": parent_name,
+                        "album_media_key": "",
+                        "created_at": "",
+                        "photo_count": 1,
+                        "cover_path": p_str if p.exists() else "",
+                        "cover_media_key": row["media_key"] or "",
+                    }
+                else:
+                    if albums_dict[parent_name]["photo_count"] == 0:
+                        albums_dict[parent_name]["photo_count"] += 1
+                        if not albums_dict[parent_name]["cover_path"] and p.exists():
+                            albums_dict[parent_name]["cover_path"] = p_str
+                        if not albums_dict[parent_name]["cover_media_key"]:
+                            albums_dict[parent_name]["cover_media_key"] = row["media_key"] or ""
+                    elif not albums_dict[parent_name].get("album_media_key"):
+                        albums_dict[parent_name]["photo_count"] += 1
+
+        return sorted(list(albums_dict.values()), key=lambda x: x["album_name"].lower())
+
+    def get_album_photos(self, album_name: str, account_email: str = "") -> List[Dict[str, Any]]:
+        """
+        Get all photos belonging to an album.
+        Checks album_items first, with fallback to path-based matching in uploads.
+        """
+        photos = []
+        with self._get_connection() as conn:
+            # 1. Look in album_items joined with uploads
+            q1 = """
+            SELECT u.filename, u.local_path, u.media_key, u.file_size, u.uploaded_at
+            FROM album_items ai
+            JOIN uploads u ON ai.media_key = u.media_key
+            WHERE ai.album_name = ? AND (ai.account_email = ? OR ai.account_email = '' OR ai.account_email IS NULL)
+            """
+            for row in conn.execute(q1, (album_name, account_email)).fetchall():
+                photos.append({
+                    "filename": row["filename"],
+                    "local_path": row["local_path"],
+                    "media_key": row["media_key"],
+                    "file_size": row["file_size"],
+                    "uploaded_at": row["uploaded_at"]
+                })
+
+            # 2. If empty, fallback to parent directory matching in uploads
+            if not photos:
+                q2 = """
+                SELECT filename, local_path, media_key, file_size, uploaded_at
+                FROM uploads
+                WHERE status = 'success' 
+                  AND (account_email = ? OR account_email = '' OR account_email IS NULL)
+                """
+                for row in conn.execute(q2, (account_email,)).fetchall():
+                    p_str = row["local_path"]
+                    if p_str and Path(p_str).parent.name == album_name:
+                        photos.append({
+                            "filename": row["filename"],
+                            "local_path": row["local_path"],
+                            "media_key": row["media_key"],
+                            "file_size": row["file_size"],
+                            "uploaded_at": row["uploaded_at"]
+                        })
+
+        return photos
+

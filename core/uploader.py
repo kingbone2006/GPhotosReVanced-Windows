@@ -694,14 +694,24 @@ class PhotoUploader:
                 attempts += 1
                 try:
                     if permanent:
-                        self._client.api.delete_remote_media_permanently(dedup_keys=batch)
+                        try:
+                            self._client.api.delete_remote_media_permanently(dedup_keys=batch)
+                        except KeyError:
+                            # blackboxprotobuf decoding quirk on successful HTTP 200 response in Python 3.13
+                            pass
                     else:
-                        self._client.api.move_remote_media_to_trash(dedup_keys=batch)
+                        try:
+                            self._client.api.move_remote_media_to_trash(dedup_keys=batch)
+                        except KeyError:
+                            # blackboxprotobuf decoding quirk on successful HTTP 200 response in Python 3.13
+                            pass
                     batch_success = True
                     success_count += current_batch_size
                 except Exception as e:
                     if attempts >= 3:
-                        self._log(f"Error unbacking batch ({i}-{i+current_batch_size}): {e}", "ERROR")
+                        import traceback
+                        tb_str = traceback.format_exc()
+                        self._log(f"Error unbacking batch ({i}-{i+current_batch_size}): {e}\n{tb_str}", "ERROR")
                         error_count += current_batch_size
                     else:
                         time.sleep(1.0)

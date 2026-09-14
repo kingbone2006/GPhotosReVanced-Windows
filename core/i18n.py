@@ -522,6 +522,70 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "📂 Choose another folder to scan & unbackup...",
         "vi": "📂 Chọn thư mục khác để quét & xoá...",
     },
+    "tab_albums": {
+        "en": "🖼️ Albums & Photos",
+        "vi": "🖼️ Album & Ảnh",
+    },
+    "albums_search_placeholder": {
+        "en": "🔍 Search album by name...",
+        "vi": "🔍 Tìm album theo tên...",
+    },
+    "albums_select_all": {
+        "en": "Select All",
+        "vi": "Chọn tất cả",
+    },
+    "albums_selected_count": {
+        "en": "Selected: {count} / {total} albums",
+        "vi": "Đã chọn: {count} / {total} album",
+    },
+    "btn_download_selected_albums": {
+        "en": "📥 Download Selected ({count})",
+        "vi": "📥 Tải {count} album đã chọn",
+    },
+    "btn_refresh_albums": {
+        "en": "🔄 Refresh",
+        "vi": "🔄 Làm mới",
+    },
+    "album_photos_count": {
+        "en": "{count} photos",
+        "vi": "{count} ảnh",
+    },
+    "btn_view_photos": {
+        "en": "View Photos",
+        "vi": "Xem ảnh",
+    },
+    "btn_download_album": {
+        "en": "Download",
+        "vi": "Tải về",
+    },
+    "btn_back_to_albums": {
+        "en": "⬅️ Back to Albums",
+        "vi": "⬅️ Quay lại danh sách Album",
+    },
+    "btn_download_this_album": {
+        "en": "📥 Download this Album to PC",
+        "vi": "📥 Tải album này về máy",
+    },
+    "dialog_select_download_dir": {
+        "en": "Select Destination Folder on PC to Save Albums",
+        "vi": "Chọn thư mục trên máy để tải album về",
+    },
+    "downloading_album_title": {
+        "en": "Downloading Albums...",
+        "vi": "Đang tải Album về máy...",
+    },
+    "download_complete_title": {
+        "en": "Download Completed",
+        "vi": "Tải về hoàn tất",
+    },
+    "download_complete_msg": {
+        "en": "Successfully downloaded {albums_count} album(s) ({files_count} files) to:\n{folder}",
+        "vi": "Đã tải xong {albums_count} album ({files_count} ảnh/video) về thư mục:\n{folder}",
+    },
+    "albums_empty": {
+        "en": "No albums found yet.\nAlbums will appear here when you upload folders with Auto-Album enabled.",
+        "vi": "Chưa có album nào.\nCác album sẽ xuất hiện tại đây khi bạn sao lưu thư mục với tính năng Gom Album tự động.",
+    },
 }
 
 

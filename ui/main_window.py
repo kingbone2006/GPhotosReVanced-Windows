@@ -19,6 +19,7 @@ from core.watcher import FolderWatcher
 from core.i18n import set_language, get_language, t
 from ui.dialogs import LoginDialog, AccountManagerDialog, UnbackupDialog
 from ui.upload_tray import ActiveUploadTray
+from ui.albums_view import AlbumsView
 
 
 class MainWindow(ctk.CTk):
@@ -127,19 +128,31 @@ class MainWindow(ctk.CTk):
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(10, 10))
 
         self.tab_dashboard = self.tabview.add("dashboard")
+        self.tab_albums = self.tabview.add("albums")
         self.tab_folders = self.tabview.add("folders")
         self.tab_logs = self.tabview.add("logs")
         self.tab_settings = self.tabview.add("settings")
 
         self.tabview._segmented_button._buttons_dict["dashboard"].configure(text=t("tab_dashboard"))
+        self.tabview._segmented_button._buttons_dict["albums"].configure(text=t("tab_albums"))
         self.tabview._segmented_button._buttons_dict["folders"].configure(text=t("tab_folders"))
         self.tabview._segmented_button._buttons_dict["logs"].configure(text=t("tab_logs"))
         self.tabview._segmented_button._buttons_dict["settings"].configure(text=t("tab_settings"))
 
         self._build_dashboard_tab()
+        self._build_albums_tab()
         self._build_folders_tab()
         self._build_logs_tab()
         self._build_settings_tab()
+
+    def _build_albums_tab(self):
+        self.albums_view = AlbumsView(
+            self.tab_albums,
+            db=self.db,
+            config_mgr=self.config_mgr,
+            get_uploader_func=lambda: self.uploader
+        )
+        self.albums_view.pack(fill="both", expand=True)
 
     def _build_dashboard_tab(self):
         tab = self.tab_dashboard
@@ -536,6 +549,7 @@ class MainWindow(ctk.CTk):
 
         # Update tabs
         self.tabview._segmented_button._buttons_dict["dashboard"].configure(text=t("tab_dashboard"))
+        self.tabview._segmented_button._buttons_dict["albums"].configure(text=t("tab_albums"))
         self.tabview._segmented_button._buttons_dict["folders"].configure(text=t("tab_folders"))
         self.tabview._segmented_button._buttons_dict["logs"].configure(text=t("tab_logs"))
         self.tabview._segmented_button._buttons_dict["settings"].configure(text=t("tab_settings"))

@@ -1,0 +1,47 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments & Virtualenv
+venv/
+env/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+
+# Local Databases and Cache
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+history.db
+
+# Logs & Debug Output
+*.log
+failed_skipped_files.log
+logs/
+
+# User & Machine Specific Configuration
+config.json
+*.local
+.env
+
+# Google Auth Profile / CDP Temp
+AuthProfile/
+.web_cache/
+
+# Operating System & IDE Artifacts
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary Installers
+python-installer.exe
+python-*.exe

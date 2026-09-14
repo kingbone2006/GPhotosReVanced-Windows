@@ -185,6 +185,18 @@ class UploadDatabase:
                     conn.execute("DELETE FROM album_items WHERE album_name = ?", (album_name,))
                 conn.commit()
 
+    def delete_album(self, album_name: str, account_email: str = "") -> None:
+        """Completely remove an album record and its items from local database."""
+        with self._lock:
+            with self._get_connection() as conn:
+                if account_email:
+                    conn.execute("DELETE FROM albums WHERE album_name = ? AND (account_email = ? OR account_email = '' OR account_email IS NULL)", (album_name, account_email))
+                    conn.execute("DELETE FROM album_items WHERE album_name = ? AND (account_email = ? OR account_email = '' OR account_email IS NULL)", (album_name, account_email))
+                else:
+                    conn.execute("DELETE FROM albums WHERE album_name = ?", (album_name,))
+                    conn.execute("DELETE FROM album_items WHERE album_name = ?", (album_name,))
+                conn.commit()
+
     @staticmethod
     def calculate_sha1(file_path: Path) -> str:
         """Calculate SHA-1 hash of a file efficiently using 4MB buffered chunks."""

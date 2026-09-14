@@ -175,6 +175,17 @@ class AlbumsView(ctk.CTkFrame):
         )
         self.lbl_viewing_album_title.pack(side="left", padx=12)
 
+        self.btn_delete_this = ctk.CTkButton(
+            p_header,
+            text=t("btn_delete_album_app"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._delete_current_viewing_album
+        )
+        self.btn_delete_this.pack(side="right", padx=(4, 10), pady=8)
+
         self.btn_download_this = ctk.CTkButton(
             p_header,
             text=t("btn_download_this_album"),
@@ -184,7 +195,7 @@ class AlbumsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._download_current_album
         )
-        self.btn_download_this.pack(side="right", padx=10, pady=8)
+        self.btn_download_this.pack(side="right", padx=(10, 4), pady=8)
 
         # Scroll area for photos
         self.photos_scroll = ctk.CTkScrollableFrame(
@@ -277,6 +288,19 @@ class AlbumsView(ctk.CTkFrame):
             )
             lbl_title.pack(side="left", fill="x", expand=True, padx=4)
             lbl_title.bind("<Button-1>", lambda e, name=album_name: self._open_album_photos(name))
+
+            btn_card_del = ctk.CTkButton(
+                top_bar,
+                text="✕",
+                width=22,
+                height=22,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color="transparent",
+                hover_color="#ef4444",
+                text_color="#71717a",
+                command=lambda name=album_name: self._confirm_delete_album(name)
+            )
+            btn_card_del.pack(side="right")
 
             thumb_box = ctk.CTkFrame(card, height=110, fg_color="#18181b", corner_radius=8)
             thumb_box.pack(fill="x", padx=10, pady=4)
@@ -497,6 +521,34 @@ class AlbumsView(ctk.CTkFrame):
             os.startfile(file_path)
         except Exception:
             pass
+
+    def _confirm_delete_album(self, album_name: str):
+        active_acc = self.config_mgr.get_active_account()
+        email = active_acc.get("email", "") if active_acc else ""
+        if messagebox.askyesno(
+            t("confirm_delete_album_title"),
+            t("confirm_delete_album_msg", name=album_name),
+            parent=self
+        ):
+            self.db.delete_album(album_name, email)
+            self._selected_album_names.discard(album_name)
+            self.load_albums()
+
+    def _delete_current_viewing_album(self):
+        if not self._current_viewing_album:
+            return
+        album_name = self._current_viewing_album
+        active_acc = self.config_mgr.get_active_account()
+        email = active_acc.get("email", "") if active_acc else ""
+        if messagebox.askyesno(
+            t("confirm_delete_album_title"),
+            t("confirm_delete_album_msg", name=album_name),
+            parent=self
+        ):
+            self.db.delete_album(album_name, email)
+            self._selected_album_names.discard(album_name)
+            self._show_albums_view()
+            self.load_albums()
 
     def _show_albums_view(self):
         self.photos_container.pack_forget()

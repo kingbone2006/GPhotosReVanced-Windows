@@ -449,8 +449,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "vi": "Huỷ sao lưu & Xoá ảnh/album trên Cloud",
     },
     "unbackup_desc": {
-        "en": "Automatically delete all backed-up photos and albums from Google Photos matching your computer files.",
-        "vi": "Tự động xoá toàn bộ album và ảnh trên Google Photos tương ứng với dữ liệu trên máy tính.",
+        "en": "Automatically delete all backed-up photos and videos from Google Photos matching your computer files.",
+        "vi": "Tự động dọn sạch toàn bộ ảnh và video đã tải lên Google Photos tương ứng với dữ liệu trên máy tính.",
     },
     "unbackup_stat_files": {
         "en": "🖼️ Found {count:,} backed-up photos/videos ({gb:.2f} GB)",
@@ -466,7 +466,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
     },
     "unbackup_mode_trash_desc": {
         "en": "Photos will immediately disappear from your library and albums, safely stored in Google Photos Trash.",
-        "vi": "Ảnh và Album sẽ biến mất khỏi thư viện ngay lập tức, lưu trong Thùng rác Google Photos (có thể khôi phục).",
+        "vi": "Ảnh sẽ biến mất khỏi thư viện và album ngay lập tức, lưu an toàn trong Thùng rác Google Photos (có thể khôi phục).",
     },
     "unbackup_mode_permanent": {
         "en": "Permanently delete from Google Photos",
@@ -480,7 +480,13 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "🛡️ 100% LOCAL DATA SAFETY GUARANTEE:\n"
               "Original photos and videos on your computer hard drive will NEVER be deleted or modified.",
         "vi": "🛡️ BẢO VỆ DỮ LIỆU CỤC BỘ 100%:\n"
-              "Toàn bộ file ảnh và video GỐC trên ổ đĩa máy tính của bạn sẽ KHÔNG BỊ XOÁ và được bảo toàn nguyên vẹn.",
+        "Toàn bộ file ảnh và video GỐC trên ổ đĩa máy tính của bạn sẽ KHÔNG BỊ XOÁ và được bảo toàn nguyên vẹn.",
+    },
+    "unbackup_album_notice": {
+        "en": "💡 Notice on Google Photos albums:\n"
+              "All photos inside albums are deleted to free storage. Google Photos preserves empty album containers (0 photos) by design. You can delete empty album shells directly on photos.google.com (3 dots -> Delete album).",
+        "vi": "💡 Lưu ý về Album trên Google Photos:\n"
+              "Toàn bộ ảnh bên trong album sẽ bị xoá sạch để giải phóng dung lượng. Theo cơ chế của Google, vỏ album rỗng (0 ảnh) được giữ lại; bạn có thể xoá vỏ album rỗng này trực tiếp trên web photos.google.com (bấm 3 chấm -> Xoá album).",
     },
     "unbackup_btn_start": {
         "en": "🗑️ Start Cloud Unbackup",
@@ -491,8 +497,14 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "vi": "Đang xoá trên Google Photos: {current:,} / {total:,} ({percent}%)",
     },
     "unbackup_completed_msg": {
-        "en": "Successfully unbacked {count:,} photos and cleaned up all associated albums from Google Photos!\n\nAll original files on your computer remain 100% safe.",
-        "vi": "Đã huỷ sao lưu thành công {count:,} ảnh/video và dọn sạch các album trên Google Photos!\n\nToàn bộ file gốc trên máy tính của bạn vẫn được bảo toàn nguyên vẹn 100%.",
+        "en": "Successfully unbacked {count:,} photos from Google Photos!\n\n"
+              "• All photos & videos have been removed from Cloud (storage freed).\n"
+              "• Google Photos keeps empty album containers (0 photos) by design. You can remove them anytime on photos.google.com (3 dots -> Delete album).\n"
+              "• All original files on your computer remain 100% safe.",
+        "vi": "Đã xoá thành công {count:,} ảnh/video trên Google Photos!\n\n"
+              "• Toàn bộ ảnh/video đã được dọn sạch khỏi Cloud (giải phóng dung lượng).\n"
+              "• Các vỏ album rỗng (0 ảnh) được Google bảo lưu theo quy tắc của họ; bạn có thể xoá vỏ album rỗng này trên photos.google.com (bấm 3 chấm -> Xoá album).\n"
+              "• Toàn bộ file gốc trên máy tính của bạn vẫn được bảo toàn nguyên vẹn 100%.",
     },
     "unbackup_no_items": {
         "en": "No backed up files found for this account to unbackup.",
@@ -585,6 +597,22 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "albums_empty": {
         "en": "No albums found yet.\nAlbums will appear here when you upload folders with Auto-Album enabled.",
         "vi": "Chưa có album nào.\nCác album sẽ xuất hiện tại đây khi bạn sao lưu thư mục với tính năng Gom Album tự động.",
+    },
+    "btn_delete_album_app": {
+        "en": "Delete Album Record",
+        "vi": "Xoá Album khỏi Ứng dụng",
+    },
+    "confirm_delete_album_title": {
+        "en": "Delete Album",
+        "vi": "Xoá Album",
+    },
+    "confirm_delete_album_msg": {
+        "en": "Are you sure you want to remove album '{name}' from the app?\n\n"
+              "• This clears the album index and tracking from this application.\n"
+              "• To permanently remove the empty album container from Google Photos Cloud, visit photos.google.com -> open album -> 3 dots -> 'Delete album'.",
+        "vi": "Bạn có chắc muốn xoá thông tin Album '{name}' khỏi ứng dụng?\n\n"
+              "• Thao tác này sẽ xoá hiển thị và liên kết album trên ứng dụng máy tính.\n"
+              "• Để xoá hoàn toàn vỏ album rỗng trên máy chủ Google Photos, bạn chỉ cần mở photos.google.com -> vào album -> bấm 3 chấm -> chọn 'Xoá album'.",
     },
 }
 

@@ -570,8 +570,8 @@ class UnbackupDialog(ctk.CTkToplevel):
         self.on_completed = on_completed
 
         self.title(t("unbackup_dialog_title"))
-        self.geometry("640x630")
-        self.minsize(580, 540)
+        self.geometry("640x670")
+        self.minsize(580, 560)
         self.grab_set()
         self.focus_set()
 
@@ -736,7 +736,7 @@ class UnbackupDialog(ctk.CTkToplevel):
 
         # 4. Safety Notice Box
         safety_box = ctk.CTkFrame(content, fg_color="#064e3b", border_width=1, border_color="#059669", corner_radius=8)
-        safety_box.pack(fill="x", padx=16, pady=6)
+        safety_box.pack(fill="x", padx=16, pady=(6, 3))
 
         ctk.CTkLabel(
             safety_box,
@@ -746,6 +746,19 @@ class UnbackupDialog(ctk.CTkToplevel):
             wraplength=550,
             justify="left"
         ).pack(anchor="w", padx=12, pady=6)
+
+        # 5. Album Notice Box
+        album_box = ctk.CTkFrame(content, fg_color="#1e293b", border_width=1, border_color="#334155", corner_radius=8)
+        album_box.pack(fill="x", padx=16, pady=(3, 6))
+
+        ctk.CTkLabel(
+            album_box,
+            text=t("unbackup_album_notice"),
+            font=ctk.CTkFont(size=10),
+            text_color="#94a3b8",
+            wraplength=550,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=5)
 
         # Progress bar (Hidden initially)
         self.progress_frame = ctk.CTkFrame(content, fg_color="transparent")

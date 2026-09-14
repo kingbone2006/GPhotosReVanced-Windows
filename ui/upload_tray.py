@@ -1,24 +1,26 @@
-"""Visual Upload Card and Tray for Google Photos ReVanced Windows.
+"""Visual Multi-Threaded Upload Tray for Google Photos ReVanced Windows.
 Emulates Android Google Photos backup carousel with live thumbnails,
-progress rings/bars, and smooth completion fade-out animation.
+progress rings/bars, and zero-flicker fixed worker slots to prevent layout thrashing.
 """
 
 import os
 import threading
 from pathlib import Path
 from typing import Optional, Dict
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageOps
 import customtkinter as ctk
 from core.i18n import t
 
 
-# Global thumbnail cache to prevent re-reading images from disk
+# Global thumbnail cache and background worker pool
 _THUMB_CACHE: Dict[str, ctk.CTkImage] = {}
 _CACHE_LOCK = threading.Lock()
+_THUMB_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ThumbWorker")
 
 
 def get_file_thumbnail(file_path: Path, size=(96, 96)) -> Optional[ctk.CTkImage]:
-    """Generate or retrieve a cached square thumbnail for image/video files."""
+    """Generate or retrieve a cached square thumbnail for image/video files using fast decoding."""
     path_str = str(file_path)
     with _CACHE_LOCK:
         if path_str in _THUMB_CACHE:
@@ -29,15 +31,18 @@ def get_file_thumbnail(file_path: Path, size=(96, 96)) -> Optional[ctk.CTkImage]
     try:
         if ext in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}:
             with Image.open(file_path) as raw:
-                # Correct orientation if EXIF present
+                # Fast DCT draft decoding for JPEG to save massive CPU and RAM
+                if ext in {".jpg", ".jpeg"}:
+                    try:
+                        raw.draft("RGB", (128, 128))
+                    except Exception:
+                        pass
                 raw = ImageOps.exif_transpose(raw)
-                # Crop and resize to square
-                img = ImageOps.fit(raw, size, Image.Resampling.LANCZOS)
+                # Fast BILINEAR resampling for 96x96 thumbnails (4x faster than Lanczos)
+                img = ImageOps.fit(raw, size, Image.Resampling.BILINEAR)
         elif ext in {".mp4", ".mov", ".mkv", ".avi", ".webm", ".3gp"}:
-            # Generate a nice video card placeholder
             img = Image.new("RGB", size, color="#1e293b")
         else:
-            # Generic file placeholder
             img = Image.new("RGB", size, color="#334155")
     except Exception:
         img = Image.new("RGB", size, color="#1e293b")
@@ -45,24 +50,23 @@ def get_file_thumbnail(file_path: Path, size=(96, 96)) -> Optional[ctk.CTkImage]
     if img:
         ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=size)
         with _CACHE_LOCK:
-            # Keep cache reasonable
-            if len(_THUMB_CACHE) > 200:
+            if len(_THUMB_CACHE) > 500:
                 _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
             _THUMB_CACHE[path_str] = ctk_img
         return ctk_img
     return None
 
 
-class UploadPhotoCard(ctk.CTkFrame):
+class WorkerSlotCard(ctk.CTkFrame):
     """
-    Individual card representing a photo or video being actively uploaded.
-    Has thumbnail, progress bar, worker tag, and handles smooth fade-out when uploaded.
+    Dedicated worker slot card. Reuses widgets in-place to guarantee ZERO overlapping,
+    eliminate layout recalculations, and deliver smooth 60fps performance.
     """
-    def __init__(self, parent, file_path: Path, worker_id: int = 1, on_removed: Optional[callable] = None):
+    def __init__(self, parent, worker_id: int = 1):
         super().__init__(
             parent,
-            width=135,
-            height=185,
+            width=140,
+            height=190,
             fg_color="#18181b",
             border_color="#27272a",
             border_width=1,
@@ -70,13 +74,12 @@ class UploadPhotoCard(ctk.CTkFrame):
         )
         self.pack_propagate(False)
 
-        self.file_path = file_path
         self.worker_id = worker_id
-        self.on_removed = on_removed
-        self._is_animating = False
+        self.current_file: Optional[Path] = None
+        self._complete_timer: Optional[str] = None
 
         # 1. Thumbnail Container
-        self.thumb_frame = ctk.CTkFrame(self, width=115, height=96, fg_color="#09090b", corner_radius=8)
+        self.thumb_frame = ctk.CTkFrame(self, width=120, height=96, fg_color="#09090b", corner_radius=8)
         self.thumb_frame.pack(padx=8, pady=(8, 4))
         self.thumb_frame.pack_propagate(False)
 
@@ -97,14 +100,11 @@ class UploadPhotoCard(ctk.CTkFrame):
         self.lbl_badge.place(x=4, y=4)
 
         # 2. File name label
-        disp_name = file_path.name
-        if len(disp_name) > 16:
-            disp_name = disp_name[:11] + "..." + file_path.suffix
         self.lbl_name = ctk.CTkLabel(
             self,
-            text=disp_name,
+            text=f"Luồng #{worker_id}",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#f4f4f5",
+            text_color="#a1a1aa",
             anchor="w"
         )
         self.lbl_name.pack(fill="x", padx=8, pady=(2, 2))
@@ -119,86 +119,109 @@ class UploadPhotoCard(ctk.CTkFrame):
             self,
             text=t("card_waiting"),
             font=ctk.CTkFont(size=10),
-            text_color="#a1a1aa",
+            text_color="#71717a",
             anchor="w"
         )
         self.lbl_status.pack(fill="x", padx=8, pady=(0, 6))
 
-        # Load thumbnail asynchronously
-        threading.Thread(target=self._load_thumbnail, daemon=True).start()
+    def set_active_file(self, file_path: Path, percent: float = 0.0, speed: str = ""):
+        # Cancel any pending reset timer
+        if self._complete_timer:
+            try:
+                self.after_cancel(self._complete_timer)
+            except Exception:
+                pass
+            self._complete_timer = None
 
-    def _load_thumbnail(self):
-        thumb = get_file_thumbnail(self.file_path, size=(96, 96))
-        if thumb:
-            self.after(0, lambda: self._apply_thumb(thumb))
+        if self.current_file != file_path:
+            self.current_file = file_path
+            disp_name = file_path.name
+            if len(disp_name) > 16:
+                disp_name = disp_name[:11] + "..." + file_path.suffix
+            self.lbl_name.configure(text=disp_name, text_color="#f4f4f5")
+            self.configure(border_color="#3b82f6", fg_color="#18181b")
+            self.lbl_badge.configure(
+                text=f"{t('card_thread')} {self.worker_id}",
+                fg_color="#1e3a8a",
+                text_color="#93c5fd"
+            )
+            self.progress_bar.configure(progress_color="#3b82f6")
+            self.progress_bar.set(percent / 100.0)
+            self.lbl_thumb.configure(image="", text="⏳")
 
-    def _apply_thumb(self, thumb: ctk.CTkImage):
-        try:
-            self.lbl_thumb.configure(image=thumb, text="")
-        except Exception:
-            pass
+            # Asynchronously load thumbnail in thread pool
+            _THUMB_EXECUTOR.submit(self._async_load_thumb, file_path)
 
-    def update_progress(self, percent: float, speed: str = ""):
-        if self._is_animating:
-            return
+        # Update progress and speed
         self.progress_bar.set(percent / 100.0)
         txt = f"{percent:.0f}%"
         if speed:
             txt += f" • {speed}"
+        elif percent == 0:
+            txt = t("card_waiting")
         self.lbl_status.configure(text=txt, text_color="#38bdf8")
 
-    def animate_complete_and_vanish(self, was_skipped: bool = False):
-        """
-        Triggers the Android Google Photos finish effect:
-        Shows checkmark, briefly glows green, shrinks/slides away, and removes itself.
-        """
-        if self._is_animating:
-            return
-        self._is_animating = True
+    def _async_load_thumb(self, file_path: Path):
+        thumb = get_file_thumbnail(file_path, size=(96, 96))
+        if thumb and self.current_file == file_path:
+            self.after(0, lambda: self._apply_thumb(thumb, file_path))
 
-        # 1. Show Completion checkmark
+    def _apply_thumb(self, thumb: ctk.CTkImage, file_path: Path):
+        if self.current_file == file_path:
+            try:
+                self.lbl_thumb.configure(image=thumb, text="")
+            except Exception:
+                pass
+
+    def set_completed(self, file_path: Path, was_skipped: bool = False):
+        if self.current_file != file_path:
+            return
+
         self.progress_bar.set(1.0)
         self.progress_bar.configure(progress_color="#22c55e")
-        self.lbl_status.configure(text=t("card_uploaded") if not was_skipped else t("card_exists"), text_color="#4ade80")
-        self.lbl_badge.configure(text=t("card_done"), fg_color="#14532d", text_color="#86efac")
+        self.lbl_status.configure(
+            text=t("card_uploaded") if not was_skipped else t("card_exists"),
+            text_color="#4ade80"
+        )
+        self.lbl_badge.configure(
+            text=t("card_done"),
+            fg_color="#14532d",
+            text_color="#86efac"
+        )
         self.configure(border_color="#22c55e", fg_color="#052e16")
 
-        # 2. Wait 400ms so user sees the green checkmark
-        self.after(450, self._start_fade_steps)
+        # After 1.5s, if no new file has been assigned, transition back to standby
+        self._complete_timer = self.after(1500, self.set_standby)
 
-    def _start_fade_steps(self):
-        # Step-by-step collapse and disappearance (mimics Android upload disappearing smoothly)
-        fade_colors = ["#064e3b", "#065f46", "#1e293b", "#0f172a", "#020617"]
-        
-        def step(idx: int):
-            if idx < len(fade_colors):
-                try:
-                    self.configure(fg_color=fade_colors[idx], border_color="#18181b")
-                    # Shrink slightly
-                    curr_h = self.cget("height")
-                    if curr_h > 40:
-                        self.configure(height=curr_h - 18)
-                    self.after(40, lambda: step(idx + 1))
-                except Exception:
-                    self._cleanup()
-            else:
-                self._cleanup()
+    def set_error(self, file_path: Path, error_msg: str):
+        if self.current_file != file_path:
+            return
+        self.progress_bar.configure(progress_color="#ef4444")
+        self.lbl_status.configure(text=error_msg[:16], text_color="#ef4444")
+        self.lbl_badge.configure(text="LỖI", fg_color="#7f1d1d", text_color="#fca5a5")
+        self.configure(border_color="#ef4444", fg_color="#18181b")
+        self._complete_timer = self.after(2000, self.set_standby)
 
-        step(0)
-
-    def _cleanup(self):
-        try:
-            if self.on_removed:
-                self.on_removed(self.file_path)
-            self.destroy()
-        except Exception:
-            pass
+    def set_standby(self):
+        self._complete_timer = None
+        self.current_file = None
+        self.configure(border_color="#27272a", fg_color="#18181b")
+        self.lbl_name.configure(text=f"Luồng #{self.worker_id}", text_color="#71717a")
+        self.lbl_status.configure(text=t("card_waiting"), text_color="#71717a")
+        self.lbl_badge.configure(
+            text=f"{t('card_thread')} {self.worker_id}",
+            fg_color="#27272a",
+            text_color="#a1a1aa"
+        )
+        self.lbl_thumb.configure(image="", text="📷")
+        self.progress_bar.set(0.0)
+        self.progress_bar.configure(progress_color="#3b82f6")
 
 
 class ActiveUploadTray(ctk.CTkFrame):
     """
     Container frame that displays the grid/carousel of actively uploading photos.
-    Manages multi-threaded card slots and gracefully vanishes completed photos.
+    Uses fixed worker slots to completely prevent widget overlapping and GUI stutter.
     """
     def __init__(self, parent):
         super().__init__(parent, fg_color="#27272a", corner_radius=10)
@@ -238,84 +261,64 @@ class ActiveUploadTray(ctk.CTkFrame):
         )
         self.lbl_counter.pack(side="right")
 
-        # Scrollable container for cards
+        # Scrollable container for worker slot cards
         self.cards_scroll = ctk.CTkScrollableFrame(
             self,
-            height=210,
+            height=215,
             orientation="horizontal",
             fg_color="#18181b",
             corner_radius=8
         )
         self.cards_scroll.pack(fill="x", padx=16, pady=(0, 10))
 
-        # Placeholder when empty
-        self.lbl_empty = ctk.CTkLabel(
-            self.cards_scroll,
-            text="✨ Tất cả ảnh và video đã được sao lưu an toàn lên Cloud!\nChưa có ảnh nào đang tải lên.",
-            font=ctk.CTkFont(size=12),
-            text_color="#71717a",
-            justify="center",
-            height=180
-        )
-        self.lbl_empty.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # Cards registry: path_str -> UploadPhotoCard
-        self._cards: Dict[str, UploadPhotoCard] = {}
+        # Fixed worker slots: worker_id (1..N) -> WorkerSlotCard
+        self.slots: Dict[int, WorkerSlotCard] = {}
+        self._current_threads = 4
+        self.set_thread_count(4)
 
     def set_thread_count(self, threads: int):
+        self._current_threads = threads
         self.lbl_active_threads.configure(text=f"{threads} luồng song song")
 
+        # Create slots up to target threads
+        for wid in range(1, threads + 1):
+            if wid not in self.slots:
+                card = WorkerSlotCard(self.cards_scroll, worker_id=wid)
+                card.pack(side="left", padx=6, pady=6)
+                self.slots[wid] = card
+            else:
+                self.slots[wid].pack(side="left", padx=6, pady=6)
+
+        # Hide extra slots if thread count decreased
+        for wid, card in list(self.slots.items()):
+            if wid > threads:
+                card.pack_forget()
+
     def add_or_update_file(self, file_path: Path, worker_id: int, percent: float = 0.0, speed: str = ""):
-        path_str = str(file_path)
-
-        # Hide empty placeholder if first card
-        if self.lbl_empty.winfo_ismapped():
-            self.lbl_empty.pack_forget()
-
-        if path_str not in self._cards:
-            card = UploadPhotoCard(
-                parent=self.cards_scroll,
-                file_path=file_path,
-                worker_id=worker_id,
-                on_removed=self._on_card_removed
-            )
+        # Ensure slot exists
+        if worker_id not in self.slots:
+            card = WorkerSlotCard(self.cards_scroll, worker_id=worker_id)
             card.pack(side="left", padx=6, pady=6)
-            self._cards[path_str] = card
+            self.slots[worker_id] = card
 
-        self._cards[path_str].update_progress(percent, speed)
+        self.slots[worker_id].set_active_file(file_path, percent, speed)
 
     def mark_completed(self, file_path: Path, was_skipped: bool = False):
-        path_str = str(file_path)
-        if path_str in self._cards:
-            self._cards[path_str].animate_complete_and_vanish(was_skipped=was_skipped)
+        # Find which slot is handling this file
+        for card in self.slots.values():
+            if card.current_file == file_path:
+                card.set_completed(file_path, was_skipped=was_skipped)
+                break
 
     def mark_error(self, file_path: Path, error_msg: str):
-        path_str = str(file_path)
-        if path_str in self._cards:
-            self._cards[path_str].lbl_status.configure(text="Lỗi tải", text_color="#ef4444")
-            self._cards[path_str].progress_bar.configure(progress_color="#ef4444")
-            self.after(2000, lambda: self._cards.get(path_str) and self._cards[path_str].animate_complete_and_vanish())
+        for card in self.slots.values():
+            if card.current_file == file_path:
+                card.set_error(file_path, error_msg)
+                break
 
     def clear_all(self):
-        for card in list(self._cards.values()):
-            try:
-                card.destroy()
-            except Exception:
-                pass
-        self._cards.clear()
-        self._check_empty()
+        for card in self.slots.values():
+            card.set_standby()
 
     def update_counts(self, active_count: int, remaining_queue: int):
         self.lbl_counter.configure(text=f"{active_count} đang tải • {remaining_queue} trong hàng đợi")
-        if active_count == 0 and remaining_queue == 0:
-            self._check_empty()
-
-    def _on_card_removed(self, file_path: Path):
-        path_str = str(file_path)
-        self._cards.pop(path_str, None)
-        self._check_empty()
-
-    def _check_empty(self):
-        if len(self._cards) == 0:
-            if not self.lbl_empty.winfo_ismapped():
-                self.lbl_empty.pack(fill="both", expand=True, padx=20, pady=20)

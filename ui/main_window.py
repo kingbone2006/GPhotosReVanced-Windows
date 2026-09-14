@@ -45,6 +45,7 @@ class MainWindow(ctk.CTk):
 
         # UI State
         self._is_paused = False
+        self._last_progress_time = {}
 
         # Build Interface
         self._build_header()
@@ -657,6 +658,13 @@ class MainWindow(ctk.CTk):
             try:
                 line = f"[{now_str}] {prefix} {message}\n"
                 self.log_textbox.insert("end", line)
+                # Keep max 1000 lines in textbox buffer to prevent GUI memory lag
+                try:
+                    num_lines = int(self.log_textbox.index("end-1c").split(".")[0])
+                    if num_lines > 1000:
+                        self.log_textbox.delete("1.0", f"{num_lines - 800}.0")
+                except Exception:
+                    pass
                 self.log_textbox.see("end")
             except Exception:
                 pass
@@ -684,6 +692,13 @@ class MainWindow(ctk.CTk):
                 else:
                     self.lbl_current_file.configure(text=f"Đang tải song song {active_count} file • Còn lại {rem_queue} trong hàng đợi")
             elif evt_type == "file_progress" and file_path:
+                now = time.time()
+                last_t = self._last_progress_time.get(worker_id, 0)
+                # Throttle rapid progress events to max 20Hz per worker (smooth 50ms)
+                if percent < 100.0 and (now - last_t < 0.05):
+                    return
+                self._last_progress_time[worker_id] = now
+
                 self.upload_tray.add_or_update_file(file_path, worker_id, percent, speed)
                 if speed:
                     speed_lbl = f"Speed: {speed}" if get_language() == "en" else f"Tốc độ: {speed}"

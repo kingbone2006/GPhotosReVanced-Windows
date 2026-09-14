@@ -388,6 +388,52 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "🔐 Connect Account with Token",
         "vi": "🔐 Kết nối tài khoản",
     },
+
+    # ------------------ Account Manager Dialog ------------------
+    "account_manager_title": {
+        "en": "Google Accounts Manager",
+        "vi": "Quản lý tài khoản Google",
+    },
+    "account_manager_header": {
+        "en": "Switch Google Account",
+        "vi": "Chuyển đổi tài khoản Google",
+    },
+    "account_manager_desc": {
+        "en": "1-Click switch between previously signed-in accounts or add a new one.",
+        "vi": "Đổi nhanh 1-Click giữa các tài khoản đã đăng nhập hoặc kết nối thêm tài khoản mới.",
+    },
+    "account_active_badge": {
+        "en": "✓ Active",
+        "vi": "✓ Đang sử dụng",
+    },
+    "account_switch_to": {
+        "en": "Switch",
+        "vi": "Chuyển",
+    },
+    "account_btn_add": {
+        "en": "➕ Add Another Google Account",
+        "vi": "➕ Thêm tài khoản Google mới",
+    },
+    "account_no_saved": {
+        "en": "No accounts saved yet.",
+        "vi": "Chưa có tài khoản nào được lưu.",
+    },
+    "confirm_remove_account_title": {
+        "en": "Confirm Account Removal",
+        "vi": "Xác nhận xoá tài khoản",
+    },
+    "confirm_remove_account_msg": {
+        "en": "Are you sure you want to remove '{email}' from saved accounts?\n\n• You will need to sign in again to use this account.\n• Files already uploaded to Google Photos will remain safe.",
+        "vi": "Bạn có chắc chắn muốn xoá tài khoản '{email}' khỏi danh sách lưu không?\n\n• Bạn sẽ cần đăng nhập lại nếu muốn sử dụng tài khoản này.\n• Ảnh/video đã sao lưu lên Google Photos vẫn được giữ nguyên an toàn.",
+    },
+    "log_account_switched": {
+        "en": "Active account switched to: {email}",
+        "vi": "Đã đổi sang tài khoản: {email}",
+    },
+    "log_account_already_active": {
+        "en": "Account '{email}' is already active.",
+        "vi": "Tài khoản '{email}' hiện đang được sử dụng.",
+    },
 }
 
 

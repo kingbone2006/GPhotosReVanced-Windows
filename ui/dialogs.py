@@ -319,3 +319,230 @@ class LoginDialog(ctk.CTkToplevel):
     def _on_dialog_close(self):
         self.auto_auth_service.cancel()
         self.destroy()
+
+
+class AccountManagerDialog(ctk.CTkToplevel):
+    """Dialog allowing users to view, 1-click switch between saved Google accounts,
+    remove an existing account, or add a new account.
+    """
+    def __init__(
+        self,
+        parent,
+        config_mgr: ConfigManager,
+        on_switch: Optional[Callable[[str], None]] = None,
+        on_add_new: Optional[Callable[[], None]] = None
+    ):
+        super().__init__(parent)
+        self.config_mgr = config_mgr
+        self.on_switch = on_switch
+        self.on_add_new = on_add_new
+
+        self.title(t("account_manager_title"))
+        self.geometry("560x480")
+        self.minsize(500, 380)
+        self.grab_set()
+        self.focus_set()
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.pack(fill="x", padx=24, pady=(20, 10))
+
+        title_lbl = ctk.CTkLabel(
+            header_frame,
+            text=t("account_manager_header"),
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title_lbl.pack(anchor="w")
+
+        desc_lbl = ctk.CTkLabel(
+            header_frame,
+            text=t("account_manager_desc"),
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        desc_lbl.pack(anchor="w", pady=(4, 0))
+
+        # Scrollable list of accounts
+        self.accounts_scroll = ctk.CTkScrollableFrame(
+            self,
+            fg_color="#18181b",
+            corner_radius=10
+        )
+        self.accounts_scroll.pack(fill="both", expand=True, padx=24, pady=(10, 14))
+
+        # Bottom Action Bar
+        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_frame.pack(fill="x", padx=24, pady=(0, 20))
+
+        btn_add = ctk.CTkButton(
+            bottom_frame,
+            text=t("account_btn_add"),
+            fg_color="#16a34a",
+            hover_color="#15803d",
+            font=ctk.CTkFont(weight="bold", size=13),
+            height=38,
+            command=self._handle_add_new
+        )
+        btn_add.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        btn_close = ctk.CTkButton(
+            bottom_frame,
+            text=t("btn_cancel"),
+            fg_color="#3f3f46",
+            hover_color="#52525b",
+            font=ctk.CTkFont(size=13),
+            height=38,
+            width=90,
+            command=self.destroy
+        )
+        btn_close.pack(side="right")
+
+        self._render_accounts()
+
+    def _render_accounts(self):
+        # Clear existing rows
+        for child in self.accounts_scroll.winfo_children():
+            child.destroy()
+
+        accounts = self.config_mgr.config.get("accounts", [])
+        active_acc = self.config_mgr.get_active_account()
+        active_email = (active_acc.get("email") or "").strip().lower() if active_acc else ""
+
+        if not accounts:
+            empty_lbl = ctk.CTkLabel(
+                self.accounts_scroll,
+                text=t("account_no_saved"),
+                font=ctk.CTkFont(size=13),
+                text_color="gray"
+            )
+            empty_lbl.pack(pady=40)
+            return
+
+        for acc in accounts:
+            email = (acc.get("email") or "").strip()
+            is_active = (email.lower() == active_email)
+
+            card = ctk.CTkFrame(
+                self.accounts_scroll,
+                fg_color="#064e3b" if is_active else "#27272a",
+                border_width=1,
+                border_color="#059669" if is_active else "#3f3f46",
+                corner_radius=8
+            )
+            card.pack(fill="x", padx=6, pady=6)
+
+            # Left side: Icon + Email info
+            left_frame = ctk.CTkFrame(card, fg_color="transparent")
+            left_frame.pack(side="left", fill="both", expand=True, padx=12, pady=10)
+
+            user_icon = ctk.CTkLabel(
+                left_frame,
+                text="👤",
+                font=ctk.CTkFont(size=20)
+            )
+            user_icon.pack(side="left", padx=(0, 10))
+
+            info_col = ctk.CTkFrame(left_frame, fg_color="transparent")
+            info_col.pack(side="left", fill="y", anchor="w")
+
+            email_lbl = ctk.CTkLabel(
+                info_col,
+                text=email,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color="#ffffff",
+                anchor="w"
+            )
+            email_lbl.pack(anchor="w")
+
+            if is_active:
+                badge_lbl = ctk.CTkLabel(
+                    info_col,
+                    text=t("account_active_badge"),
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="#34d399",
+                    anchor="w"
+                )
+                badge_lbl.pack(anchor="w")
+            else:
+                sub_lbl = ctk.CTkLabel(
+                    info_col,
+                    text="Pixel XL Unlimited Backup",
+                    font=ctk.CTkFont(size=11),
+                    text_color="#9ca3af",
+                    anchor="w"
+                )
+                sub_lbl.pack(anchor="w")
+
+            # Right side: Action buttons
+            right_frame = ctk.CTkFrame(card, fg_color="transparent")
+            right_frame.pack(side="right", padx=12, pady=10)
+
+            if not is_active:
+                btn_switch = ctk.CTkButton(
+                    right_frame,
+                    text=t("account_switch_to"),
+                    width=74,
+                    height=30,
+                    fg_color="#0284c7",
+                    hover_color="#0369a1",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    command=lambda e=email: self._handle_switch(e)
+                )
+                btn_switch.pack(side="left", padx=(0, 6))
+
+            btn_delete = ctk.CTkButton(
+                right_frame,
+                text="🗑️",
+                width=32,
+                height=30,
+                fg_color="#7f1d1d",
+                hover_color="#991b1b",
+                font=ctk.CTkFont(size=12),
+                command=lambda e=email: self._handle_remove(e)
+            )
+            btn_delete.pack(side="left")
+
+    def _handle_switch(self, email: str):
+        self.destroy()
+        if self.on_switch:
+            self.on_switch(email)
+
+    def _handle_remove(self, email: str):
+        confirm = messagebox.askyesno(
+            t("confirm_remove_account_title"),
+            t("confirm_remove_account_msg", email=email),
+            parent=self
+        )
+        if not confirm:
+            return
+
+        # Check if the account being removed was active
+        active_acc = self.config_mgr.get_active_account()
+        was_active = bool(active_acc and active_acc.get("email", "").lower() == email.lower())
+
+        self.config_mgr.remove_account(email)
+
+        accounts = self.config_mgr.config.get("accounts", [])
+        if was_active:
+            # If there's another account remaining, switch to it
+            new_active = self.config_mgr.get_active_account()
+            if new_active and self.on_switch:
+                self.on_switch(new_active.get("email", ""))
+            elif not accounts and self.on_switch:
+                self.on_switch("")
+
+        if not accounts:
+            self.destroy()
+            if self.on_add_new:
+                self.on_add_new()
+        else:
+            self._render_accounts()
+
+    def _handle_add_new(self):
+        self.destroy()
+        if self.on_add_new:
+            self.on_add_new()
+

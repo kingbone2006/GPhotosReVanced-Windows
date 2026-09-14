@@ -363,18 +363,32 @@ class UploadDatabase:
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get summary statistics: total files, total bytes uploaded, GB saved."""
+    def get_statistics(self, account_email: Optional[str] = None) -> Dict[str, Any]:
+        """Get summary statistics: total files, total bytes uploaded, GB saved.
+        If account_email is provided, returns statistics specifically for that account.
+        """
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT 
-                    COUNT(id) AS total_count,
-                    COALESCE(SUM(file_size), 0) AS total_bytes
-                FROM uploads
-                WHERE status = 'success'
-                """
-            )
+            if account_email:
+                cursor = conn.execute(
+                    """
+                    SELECT 
+                        COUNT(id) AS total_count,
+                        COALESCE(SUM(file_size), 0) AS total_bytes
+                    FROM uploads
+                    WHERE status = 'success' AND account_email = ?
+                    """,
+                    (account_email,)
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    SELECT 
+                        COUNT(id) AS total_count,
+                        COALESCE(SUM(file_size), 0) AS total_bytes
+                    FROM uploads
+                    WHERE status = 'success'
+                    """
+                )
             row = cursor.fetchone()
             total_count = row["total_count"] if row else 0
             total_bytes = row["total_bytes"] if row else 0
@@ -388,13 +402,19 @@ class UploadDatabase:
                 "total_gb": total_gb,
             }
 
-    def clear_history(self) -> None:
-        """Clear all upload records and reset statistics to zero."""
+    def clear_history(self, account_email: Optional[str] = None) -> None:
+        """Clear upload records and reset statistics to zero.
+        If account_email is provided, only clears records for that account.
+        """
         with self._lock:
             with self._get_connection() as conn:
-                conn.execute("DELETE FROM uploads")
-                try:
-                    conn.execute("DELETE FROM sqlite_sequence WHERE name = 'uploads'")
-                except Exception:
-                    pass
+                if account_email:
+                    conn.execute("DELETE FROM uploads WHERE account_email = ?", (account_email,))
+                else:
+                    conn.execute("DELETE FROM uploads")
+                    try:
+                        conn.execute("DELETE FROM sqlite_sequence WHERE name = 'uploads'")
+                    except Exception:
+                        pass
                 conn.commit()
+            self._fast_cache = None

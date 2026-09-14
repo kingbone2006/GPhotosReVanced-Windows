@@ -17,7 +17,7 @@ from core.db import UploadDatabase
 from core.uploader import PhotoUploader, SUPPORTED_EXTENSIONS
 from core.watcher import FolderWatcher
 from core.i18n import set_language, get_language, t
-from ui.dialogs import LoginDialog
+from ui.dialogs import LoginDialog, AccountManagerDialog
 from ui.upload_tray import ActiveUploadTray
 
 
@@ -105,9 +105,11 @@ class MainWindow(ctk.CTk):
             text=t("account_loading"),
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#f4f4f5",
-            padx=12
+            padx=12,
+            cursor="hand2"
         )
         self.account_label.pack(side="left", padx=(6, 4))
+        self.account_label.bind("<Button-1>", lambda e: self._on_click_account())
 
         self.btn_account = ctk.CTkButton(
             self.account_frame,
@@ -115,7 +117,7 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=12),
             height=30,
             width=120,
-            command=self._open_login_dialog
+            command=self._on_click_account
         )
         self.btn_account.pack(side="left", padx=(0, 6), pady=4)
 
@@ -701,7 +703,9 @@ class MainWindow(ctk.CTk):
         self.after(0, _process)
 
     def _refresh_stats(self):
-        stats = self.db.get_statistics()
+        active_acc = self.config_mgr.get_active_account()
+        active_email = active_acc.get("email") if active_acc else None
+        stats = self.db.get_statistics(account_email=active_email)
         self.lbl_stat_files.configure(text=f"{stats['total_files']:,} files")
         self.lbl_stat_saved.configure(text=f"{stats['total_gb']:.2f} GB")
 
@@ -715,6 +719,24 @@ class MainWindow(ctk.CTk):
             self.append_log("No Google account connected. Please sign in to activate unlimited backup.", "WARNING")
             self._open_login_dialog()
             return
+
+        # Stop previous background tasks if re-initializing
+        if self.watcher:
+            try:
+                self.watcher.stop()
+            except Exception:
+                pass
+            self.watcher = None
+        if self.uploader:
+            try:
+                self.uploader.flush_pending_albums(timeout=2.0)
+            except Exception:
+                pass
+            try:
+                self.uploader.cancel()
+            except Exception:
+                pass
+            self.uploader = None
 
         email = active_acc.get("email", "Google Account")
         auth_data = active_acc.get("auth_data")
@@ -776,6 +798,89 @@ class MainWindow(ctk.CTk):
                 self.uploader.start_background_worker()
             self.upload_tray.set_thread_count(threads)
             self.append_log(f"Switched to {threads} concurrent threads.", "INFO")
+
+    def _on_click_account(self):
+        accounts = self.config_mgr.config.get("accounts", [])
+        if not accounts:
+            self._open_login_dialog()
+        else:
+            self._open_account_manager()
+
+    def _open_account_manager(self):
+        accounts = self.config_mgr.config.get("accounts", [])
+        if not accounts:
+            self._open_login_dialog()
+            return
+        AccountManagerDialog(
+            parent=self,
+            config_mgr=self.config_mgr,
+            on_switch=self._on_switch_account,
+            on_add_new=self._open_login_dialog
+        )
+
+    def _on_switch_account(self, email: str):
+        if not email:
+            # Handle case where all accounts were removed
+            if self.watcher:
+                try:
+                    self.watcher.stop()
+                except Exception:
+                    pass
+                self.watcher = None
+            if self.uploader:
+                try:
+                    self.uploader.flush_pending_albums(timeout=2.0)
+                except Exception:
+                    pass
+                try:
+                    self.uploader.cancel()
+                except Exception:
+                    pass
+                self.uploader = None
+            self.account_label.configure(text=t("account_unconnected"))
+            self.btn_account.configure(text=t("btn_connect_account"))
+            self._refresh_stats()
+            self.append_log("No active account connected.", "WARNING")
+            return
+
+        active_acc = self.config_mgr.get_active_account()
+        current_email = active_acc.get("email", "") if active_acc else ""
+        if current_email.lower() == email.lower() and self.uploader:
+            self.append_log(t("log_account_already_active", email=email), "INFO")
+            return
+
+        self.append_log(f"Switching account to {email}...", "INFO")
+
+        # Stop previous background tasks cleanly
+        if self.watcher:
+            try:
+                self.watcher.stop()
+            except Exception:
+                pass
+            self.watcher = None
+        if self.uploader:
+            try:
+                self.uploader.flush_pending_albums(timeout=2.0)
+            except Exception:
+                pass
+            try:
+                self.uploader.cancel()
+            except Exception:
+                pass
+            self.uploader = None
+
+        # Clear UI upload tray & reset queue progress
+        self.upload_tray.clear_all()
+        self.progress_bar.set(0)
+        self.lbl_current_file.configure(text=t("queue_ready_empty"))
+        self.lbl_speed.configure(text="")
+
+        # Switch active email in config
+        self.config_mgr.set_active_account(email)
+
+        # Re-initialize engine for the new account
+        self._init_engine()
+        self.append_log(t("log_account_switched", email=email), "SUCCESS")
 
     def _open_login_dialog(self):
         LoginDialog(self, self.config_mgr, on_success=self._on_login_success)
@@ -1019,7 +1124,9 @@ class MainWindow(ctk.CTk):
             return
 
         try:
-            self.db.clear_history()
+            active_acc = self.config_mgr.get_active_account()
+            active_email = active_acc.get("email") if active_acc else None
+            self.db.clear_history(account_email=active_email)
             self._refresh_stats()
             self.upload_tray.clear_all()
             self.progress_bar.set(0)

@@ -761,7 +761,6 @@ class MainWindow(ctk.CTk):
                 threads=threads,
                 auto_album=auto_album,
                 log_callback=self.append_log,
-                log_func=self.append_log,
                 event_callback=self._handle_uploader_event
             )
             self.uploader.start_background_worker()

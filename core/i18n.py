@@ -465,8 +465,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "vi": "Chuyển vào Thùng rác Google Photos (Khuyên dùng - An toàn 60 ngày)",
     },
     "unbackup_mode_trash_desc": {
-        "en": "Photos will immediately disappear from your library and albums, safely stored in Google Photos Trash.",
-        "vi": "Ảnh sẽ biến mất khỏi thư viện và album ngay lập tức, lưu an toàn trong Thùng rác Google Photos (có thể khôi phục).",
+        "en": "Photos will move safely into Google Photos Trash (indexed by photo capture date, recoverable for 60 days).",
+        "vi": "Ảnh sẽ được chuyển an toàn vào Thùng rác Google Photos (sắp xếp theo ngày chụp ảnh, có thể khôi phục trong 60 ngày).",
     },
     "unbackup_mode_permanent": {
         "en": "Permanently delete from Google Photos",

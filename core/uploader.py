@@ -637,3 +637,81 @@ class PhotoUploader:
             "status": "Hoàn tất ✓",
             "was_skipped": False,
         })
+
+    def unbackup_remote_media(
+        self,
+        sha1_hashes: Sequence[str],
+        permanent: bool = False,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> Tuple[int, int]:
+        """
+        Delete or move remote media items to Google Photos Trash using SHA-1 hashes.
+        Processes in batches of 500 to conform to Google Photos Mobile API limits.
+
+        Args:
+            sha1_hashes: List of hex SHA-1 hashes to delete from Google Photos.
+            permanent: If True, permanently delete; if False, move to Google Photos Trash.
+            progress_callback: Optional callback receiving (processed_count, total_count).
+
+        Returns:
+            Tuple[int, int]: (success_count, error_count)
+        """
+        if not self._client:
+            self._init_client()
+        if not self._client:
+            raise RuntimeError("Google Photos client is not initialized.")
+
+        import base64
+        import gpmc.utils as gpmc_utils
+
+        total_count = len(sha1_hashes)
+        if total_count == 0:
+            return (0, 0)
+
+        # Convert hex sha1 to urlsafe base64 dedup_keys
+        dedup_keys = []
+        for h in sha1_hashes:
+            try:
+                if len(h) == 40:
+                    raw_bytes = bytes.fromhex(h)
+                    b64_str = base64.b64encode(raw_bytes).decode("utf-8")
+                else:
+                    b64_str = h
+                dedup_keys.append(gpmc_utils.urlsafe_base64(b64_str))
+            except Exception:
+                continue
+
+        batch_size = 500
+        success_count = 0
+        error_count = 0
+
+        for i in range(0, len(dedup_keys), batch_size):
+            batch = dedup_keys[i : i + batch_size]
+            current_batch_size = len(batch)
+            attempts = 0
+            batch_success = False
+
+            while attempts < 3 and not batch_success:
+                attempts += 1
+                try:
+                    if permanent:
+                        self._client.api.delete_remote_media_permanently(dedup_keys=batch)
+                    else:
+                        self._client.api.move_remote_media_to_trash(dedup_keys=batch)
+                    batch_success = True
+                    success_count += current_batch_size
+                except Exception as e:
+                    if attempts >= 3:
+                        self._log(f"Error unbacking batch ({i}-{i+current_batch_size}): {e}", "ERROR")
+                        error_count += current_batch_size
+                    else:
+                        time.sleep(1.0)
+
+            if progress_callback:
+                try:
+                    progress_callback(min(i + current_batch_size, total_count), total_count)
+                except Exception:
+                    pass
+
+        return (success_count, error_count)
+

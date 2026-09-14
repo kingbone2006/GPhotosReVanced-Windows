@@ -434,6 +434,74 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Account '{email}' is already active.",
         "vi": "Tài khoản '{email}' hiện đang được sử dụng.",
     },
+
+    # ------------------ Unbackup Cloud Feature ------------------
+    "btn_unbackup_cloud": {
+        "en": "🗑️ Unbackup Cloud",
+        "vi": "🗑️ Huỷ sao lưu",
+    },
+    "unbackup_dialog_title": {
+        "en": "Google Photos - Cloud Unbackup",
+        "vi": "Huỷ sao lưu trên Google Photos",
+    },
+    "unbackup_header": {
+        "en": "Unbackup Photos & Albums from Cloud",
+        "vi": "Huỷ sao lưu & Xoá ảnh/album trên Cloud",
+    },
+    "unbackup_desc": {
+        "en": "Automatically delete all backed-up photos and albums from Google Photos matching your computer files.",
+        "vi": "Tự động xoá toàn bộ album và ảnh trên Google Photos tương ứng với dữ liệu trên máy tính.",
+    },
+    "unbackup_stat_files": {
+        "en": "🖼️ Found {count:,} backed-up photos/videos ({gb:.2f} GB)",
+        "vi": "🖼️ Đã tìm thấy {count:,} ảnh/video đã sao lưu ({gb:.2f} GB)",
+    },
+    "unbackup_stat_albums": {
+        "en": "📁 Found {count} album(s) created on Google Photos",
+        "vi": "📁 Đã tìm thấy {count} album đã tạo trên Google Photos",
+    },
+    "unbackup_mode_trash": {
+        "en": "Move to Google Photos Trash (Recommended - Recoverable for 60 days)",
+        "vi": "Chuyển vào Thùng rác Google Photos (Khuyên dùng - An toàn 60 ngày)",
+    },
+    "unbackup_mode_trash_desc": {
+        "en": "Photos will immediately disappear from your library and albums, safely stored in Google Photos Trash.",
+        "vi": "Ảnh và Album sẽ biến mất khỏi thư viện ngay lập tức, lưu trong Thùng rác Google Photos (có thể khôi phục).",
+    },
+    "unbackup_mode_permanent": {
+        "en": "Permanently delete from Google Photos",
+        "vi": "Xoá vĩnh viễn khỏi Google Photos",
+    },
+    "unbackup_mode_permanent_desc": {
+        "en": "Permanently deletes items from Google Photos cloud without moving to trash. Cannot be undone.",
+        "vi": "Xoá hoàn toàn và vĩnh viễn trên Google Photos không qua thùng rác. Không thể khôi phục.",
+    },
+    "unbackup_safety_notice": {
+        "en": "🛡️ 100% LOCAL DATA SAFETY GUARANTEE:\n"
+              "Original photos and videos on your computer hard drive will NEVER be deleted or modified.",
+        "vi": "🛡️ BẢO VỆ DỮ LIỆU CỤC BỘ 100%:\n"
+              "Toàn bộ file ảnh và video GỐC trên ổ đĩa máy tính của bạn sẽ KHÔNG BỊ XOÁ và được bảo toàn nguyên vẹn.",
+    },
+    "unbackup_btn_start": {
+        "en": "🗑️ Start Cloud Unbackup",
+        "vi": "🗑️ Bắt đầu Huỷ sao lưu",
+    },
+    "unbackup_in_progress": {
+        "en": "Deleting from Google Photos: {current:,} / {total:,} ({percent}%)",
+        "vi": "Đang xoá trên Google Photos: {current:,} / {total:,} ({percent}%)",
+    },
+    "unbackup_completed_msg": {
+        "en": "Successfully unbacked {count:,} photos and cleaned up all associated albums from Google Photos!\n\nAll original files on your computer remain 100% safe.",
+        "vi": "Đã huỷ sao lưu thành công {count:,} ảnh/video và dọn sạch các album trên Google Photos!\n\nToàn bộ file gốc trên máy tính của bạn vẫn được bảo toàn nguyên vẹn 100%.",
+    },
+    "unbackup_no_items": {
+        "en": "No backed up files found for this account to unbackup.",
+        "vi": "Không tìm thấy file nào đã sao lưu của tài khoản này để huỷ.",
+    },
+    "unbackup_error": {
+        "en": "Error during cloud unbackup: {error}",
+        "vi": "Lỗi trong quá trình huỷ sao lưu: {error}",
+    },
 }
 
 

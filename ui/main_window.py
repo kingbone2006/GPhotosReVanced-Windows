@@ -16,8 +16,7 @@ from core.auth import ConfigManager
 from core.db import UploadDatabase
 from core.uploader import PhotoUploader, SUPPORTED_EXTENSIONS
 from core.watcher import FolderWatcher
-from core.i18n import set_language, get_language, t
-from ui.dialogs import LoginDialog, AccountManagerDialog
+from ui.dialogs import LoginDialog, AccountManagerDialog, UnbackupDialog
 from ui.upload_tray import ActiveUploadTray
 
 
@@ -255,10 +254,21 @@ class MainWindow(ctk.CTk):
             text=t("btn_reset_stats"),
             fg_color="#3f3f46",
             hover_color="#52525b",
-            width=120,
+            width=110,
             command=self._confirm_reset_statistics
         )
         self.btn_reset_action.pack(side="left", padx=6)
+
+        self.btn_unbackup = ctk.CTkButton(
+            btn_row,
+            text=t("btn_unbackup_cloud"),
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            font=ctk.CTkFont(weight="bold"),
+            width=120,
+            command=self._open_unbackup_dialog
+        )
+        self.btn_unbackup.pack(side="left", padx=6)
 
         # Right: Quick Thread Selector
         thread_box = ctk.CTkFrame(btn_row, fg_color="transparent")
@@ -560,6 +570,7 @@ class MainWindow(ctk.CTk):
         self.btn_pause.configure(text=t("btn_resume") if self._is_paused else t("btn_pause"))
         self.btn_cancel.configure(text=t("btn_cancel"))
         self.btn_reset_action.configure(text=t("btn_reset_stats"))
+        self.btn_unbackup.configure(text=t("btn_unbackup_cloud"))
         self.lbl_quick_threads_title.configure(text=t("lbl_threads"))
 
         # Update quick threads combobox
@@ -887,6 +898,44 @@ class MainWindow(ctk.CTk):
     def _on_login_success(self, email: str):
         self.append_log(f"Successfully signed in: {email}", "SUCCESS")
         self._init_engine()
+
+    def _open_unbackup_dialog(self):
+        active_acc = self.config_mgr.get_active_account()
+        if not active_acc or not active_acc.get("auth_data"):
+            messagebox.showwarning(t("alert_warning"), t("account_unconnected"), parent=self)
+            return
+
+        if not self.uploader:
+            self._init_engine()
+
+        # Pause auto-sync watcher while unbackup is active
+        if self.watcher and self.watcher.is_running:
+            try:
+                self.watcher.stop()
+            except Exception:
+                pass
+
+        UnbackupDialog(
+            parent=self,
+            config_mgr=self.config_mgr,
+            db=self.db,
+            uploader=self.uploader,
+            on_completed=self._on_unbackup_completed
+        )
+
+    def _on_unbackup_completed(self, count: int):
+        self._refresh_stats()
+        self.upload_tray.clear_all()
+        self.progress_bar.set(0)
+        self.lbl_current_file.configure(text=t("queue_ready_empty"))
+        self.append_log(t("unbackup_completed_msg", count=count), "SUCCESS")
+
+        # Resume watcher if auto_sync enabled
+        if self.config_mgr.config.get("auto_sync", True) and self.watcher:
+            try:
+                self.watcher.start()
+            except Exception:
+                pass
 
     def _refresh_folder_list(self):
         for widget in self.folder_list_frame.winfo_children():

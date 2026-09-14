@@ -418,3 +418,48 @@ class UploadDatabase:
                         pass
                 conn.commit()
             self._fast_cache = None
+
+    def get_account_unbackup_info(self, account_email: str) -> Dict[str, Any]:
+        """Get all sha1 hashes, count, total size, and album count for unbackup."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT sha1_hash, file_size
+                FROM uploads
+                WHERE status = 'success' AND (account_email = ? OR account_email = '' OR account_email IS NULL)
+                """,
+                (account_email,)
+            )
+            rows = cursor.fetchall()
+            hashes = list(dict.fromkeys([r["sha1_hash"] for r in rows if r["sha1_hash"]]))
+            total_size = sum(r["file_size"] for r in rows)
+
+            album_cursor = conn.execute(
+                "SELECT COUNT(DISTINCT album_name) as album_count FROM albums WHERE account_email = ? OR account_email = '' OR account_email IS NULL",
+                (account_email,)
+            )
+            album_row = album_cursor.fetchone()
+            album_count = album_row["album_count"] if album_row else 0
+
+            return {
+                "hashes": hashes,
+                "total_files": len(hashes),
+                "total_bytes": total_size,
+                "total_gb": round(total_size / (1024 ** 3), 2),
+                "album_count": album_count,
+            }
+
+    def clear_account_data(self, account_email: str) -> None:
+        """Clear all uploads, albums, and album_items associated with account_email."""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute("DELETE FROM uploads WHERE account_email = ? OR account_email = '' OR account_email IS NULL", (account_email,))
+                conn.execute("DELETE FROM albums WHERE account_email = ? OR account_email = '' OR account_email IS NULL", (account_email,))
+                conn.execute("DELETE FROM album_items WHERE account_email = ? OR account_email = '' OR account_email IS NULL", (account_email,))
+                try:
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('uploads', 'albums', 'album_items')")
+                except Exception:
+                    pass
+                conn.commit()
+            self._fast_cache = None
+

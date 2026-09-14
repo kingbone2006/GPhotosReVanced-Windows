@@ -546,3 +546,256 @@ class AccountManagerDialog(ctk.CTkToplevel):
         if self.on_add_new:
             self.on_add_new()
 
+
+class UnbackupDialog(ctk.CTkToplevel):
+    """Confirmation and progress dialog for Unbackup Cloud (undoing backup on Google Photos).
+    Deletes all uploaded photos/videos and clears albums from Google Photos without touching local files.
+    """
+    def __init__(
+        self,
+        parent,
+        config_mgr: ConfigManager,
+        db,
+        uploader,
+        on_completed: Optional[Callable[[int], None]] = None
+    ):
+        super().__init__(parent)
+        self.config_mgr = config_mgr
+        self.db = db
+        self.uploader = uploader
+        self.on_completed = on_completed
+
+        self.title(t("unbackup_dialog_title"))
+        self.geometry("620x560")
+        self.minsize(560, 500)
+        self.grab_set()
+        self.focus_set()
+
+        self._is_running = False
+
+        active_acc = self.config_mgr.get_active_account()
+        self.email = active_acc.get("email", "") if active_acc else ""
+        self.info = self.db.get_account_unbackup_info(self.email)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # Header Frame
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(20, 10))
+
+        ctk.CTkLabel(
+            header,
+            text=t("unbackup_header"),
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color="#ef4444"
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            header,
+            text=t("unbackup_desc"),
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            wraplength=560,
+            justify="left"
+        ).pack(anchor="w", pady=(4, 0))
+
+        # Content Frame
+        content = ctk.CTkFrame(self, fg_color="#18181b", corner_radius=10)
+        content.pack(fill="both", expand=True, padx=24, pady=10)
+
+        # Account & Stats Box
+        stats_box = ctk.CTkFrame(content, fg_color="#27272a", corner_radius=8)
+        stats_box.pack(fill="x", padx=16, pady=(16, 12))
+
+        ctk.CTkLabel(
+            stats_box,
+            text=f"👤 Tài khoản: {self.email}",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#ffffff"
+        ).pack(anchor="w", padx=14, pady=(10, 4))
+
+        count = self.info["total_files"]
+        gb = self.info["total_gb"]
+        album_cnt = self.info["album_count"]
+
+        ctk.CTkLabel(
+            stats_box,
+            text=t("unbackup_stat_files", count=count, gb=gb),
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=14, pady=2)
+
+        ctk.CTkLabel(
+            stats_box,
+            text=t("unbackup_stat_albums", count=album_cnt),
+            font=ctk.CTkFont(size=12),
+            text_color="#a1a1aa"
+        ).pack(anchor="w", padx=14, pady=(2, 10))
+
+        # Mode Selection
+        mode_box = ctk.CTkFrame(content, fg_color="#27272a", corner_radius=8)
+        mode_box.pack(fill="x", padx=16, pady=6)
+
+        self.mode_var = ctk.StringVar(value="trash")
+
+        rb_trash = ctk.CTkRadioButton(
+            mode_box,
+            text=t("unbackup_mode_trash"),
+            value="trash",
+            variable=self.mode_var,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#f4f4f5"
+        )
+        rb_trash.pack(anchor="w", padx=14, pady=(10, 2))
+
+        ctk.CTkLabel(
+            mode_box,
+            text=t("unbackup_mode_trash_desc"),
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            wraplength=520,
+            justify="left"
+        ).pack(anchor="w", padx=36, pady=(0, 8))
+
+        rb_perm = ctk.CTkRadioButton(
+            mode_box,
+            text=t("unbackup_mode_permanent"),
+            value="permanent",
+            variable=self.mode_var,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#f87171"
+        )
+        rb_perm.pack(anchor="w", padx=14, pady=(2, 2))
+
+        ctk.CTkLabel(
+            mode_box,
+            text=t("unbackup_mode_permanent_desc"),
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            wraplength=520,
+            justify="left"
+        ).pack(anchor="w", padx=36, pady=(0, 10))
+
+        # Safety Notice Box
+        safety_box = ctk.CTkFrame(content, fg_color="#064e3b", border_width=1, border_color="#059669", corner_radius=8)
+        safety_box.pack(fill="x", padx=16, pady=10)
+
+        ctk.CTkLabel(
+            safety_box,
+            text=t("unbackup_safety_notice"),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#a7f3d0",
+            wraplength=530,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=8)
+
+        # Progress bar (Hidden initially)
+        self.progress_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self.progress_frame.pack(fill="x", padx=16, pady=4)
+
+        self.progress_bar = ctk.CTkProgressBar(self.progress_frame, height=10)
+        self.progress_bar.set(0)
+        self.lbl_progress = ctk.CTkLabel(
+            self.progress_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#38bdf8"
+        )
+
+        # Action Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=24, pady=(10, 20))
+
+        self.btn_cancel = ctk.CTkButton(
+            btn_frame,
+            text=t("btn_cancel"),
+            fg_color="#3f3f46",
+            hover_color="#52525b",
+            height=40,
+            width=100,
+            command=self.destroy
+        )
+        self.btn_cancel.pack(side="right", padx=(10, 0))
+
+        self.btn_start = ctk.CTkButton(
+            btn_frame,
+            text=t("unbackup_btn_start"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            height=40,
+            command=self._start_unbackup
+        )
+        self.btn_start.pack(side="right", fill="x", expand=True)
+
+        if self.info["total_files"] == 0:
+            self.btn_start.configure(state="disabled")
+
+    def _start_unbackup(self):
+        if self._is_running:
+            return
+
+        hashes = self.info["hashes"]
+        if not hashes:
+            messagebox.showinfo(t("alert_info"), t("unbackup_no_items"), parent=self)
+            return
+
+        self._is_running = True
+        self.btn_start.configure(state="disabled", text="⏳ Đang tiến hành huỷ sao lưu...")
+        self.btn_cancel.configure(state="disabled")
+
+        self.progress_bar.pack(fill="x", pady=(4, 4))
+        self.lbl_progress.pack(anchor="w", pady=(0, 4))
+        self.progress_bar.set(0)
+
+        permanent = (self.mode_var.get() == "permanent")
+
+        def run():
+            try:
+                def progress(curr, total):
+                    pct = curr / total if total > 0 else 0
+                    txt = t("unbackup_in_progress", current=curr, total=total, percent=int(pct * 100))
+                    self.after(0, lambda: self._update_ui_progress(pct, txt))
+
+                success_cnt, err_cnt = self.uploader.unbackup_remote_media(
+                    sha1_hashes=hashes,
+                    permanent=permanent,
+                    progress_callback=progress
+                )
+
+                # Clear DB records for this account
+                self.db.clear_account_data(self.email)
+
+                self.after(0, lambda: self._on_success(success_cnt))
+            except Exception as e:
+                self.after(0, lambda: self._on_error(str(e)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _update_ui_progress(self, pct: float, txt: str):
+        self.progress_bar.set(pct)
+        self.lbl_progress.configure(text=txt)
+
+    def _on_success(self, count: int):
+        self._is_running = False
+        messagebox.showinfo(
+            t("alert_success"),
+            t("unbackup_completed_msg", count=count),
+            parent=self
+        )
+        if self.on_completed:
+            self.on_completed(count)
+        self.destroy()
+
+    def _on_error(self, err: str):
+        self._is_running = False
+        self.btn_start.configure(state="normal", text=t("unbackup_btn_start"))
+        self.btn_cancel.configure(state="normal")
+        messagebox.showerror(
+            t("alert_error"),
+            t("unbackup_error", error=err),
+            parent=self
+        )
+
+

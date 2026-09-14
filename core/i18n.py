@@ -502,6 +502,26 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Error during cloud unbackup: {error}",
         "vi": "Lỗi trong quá trình huỷ sao lưu: {error}",
     },
+    "unbackup_scan_machine": {
+        "en": "Scanning computer folders: {folder}...",
+        "vi": "Đang tự động quét thư mục trên máy: {folder}...",
+    },
+    "unbackup_found_folder_files": {
+        "en": "📁 Found {count:,} photos/videos on computer ({folder})",
+        "vi": "📁 Đã quét thấy: {count:,} ảnh/video trên máy ({folder})",
+    },
+    "unbackup_scope_folder": {
+        "en": "Unbackup photos matching computer folders ({count:,} files)",
+        "vi": "Xoá ảnh trên Cloud giống với thư mục trên máy ({count:,} file)",
+    },
+    "unbackup_scope_db": {
+        "en": "Unbackup only files in database history ({count:,} files)",
+        "vi": "Chỉ xoá các file đã ghi nhận trong lịch sử app ({count:,} file)",
+    },
+    "btn_choose_other_folder": {
+        "en": "📂 Choose another folder to scan & unbackup...",
+        "vi": "📂 Chọn thư mục khác để quét & xoá...",
+    },
 }
 
 

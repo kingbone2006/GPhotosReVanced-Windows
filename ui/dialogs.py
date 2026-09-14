@@ -3,13 +3,17 @@ Includes Google Account login modal with 1-Click Auto Login (Automatic CDP Token
 Copy Token button, and fallback manual pasting.
 """
 
+import os
 import threading
+from pathlib import Path
 import customtkinter as ctk
 from typing import Optional, Callable
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 
 from core.auth import exchange_oauth_token, validate_auth_data, ConfigManager
 from core.auto_auth import AutoLoginService
+from core.uploader import SUPPORTED_EXTENSIONS
+from core.db import UploadDatabase
 from core.i18n import t
 
 
@@ -549,7 +553,7 @@ class AccountManagerDialog(ctk.CTkToplevel):
 
 class UnbackupDialog(ctk.CTkToplevel):
     """Confirmation and progress dialog for Unbackup Cloud (undoing backup on Google Photos).
-    Deletes all uploaded photos/videos and clears albums from Google Photos without touching local files.
+    Deletes all uploaded photos/videos and clears albums from Google Photos matching files on the machine.
     """
     def __init__(
         self,
@@ -566,23 +570,25 @@ class UnbackupDialog(ctk.CTkToplevel):
         self.on_completed = on_completed
 
         self.title(t("unbackup_dialog_title"))
-        self.geometry("620x560")
-        self.minsize(560, 500)
+        self.geometry("640x630")
+        self.minsize(580, 540)
         self.grab_set()
         self.focus_set()
 
         self._is_running = False
+        self._folder_files = []
 
         active_acc = self.config_mgr.get_active_account()
         self.email = active_acc.get("email", "") if active_acc else ""
         self.info = self.db.get_account_unbackup_info(self.email)
 
         self._build_ui()
+        self._start_folder_scan()
 
     def _build_ui(self):
         # Header Frame
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=24, pady=(20, 10))
+        header.pack(fill="x", padx=24, pady=(16, 8))
 
         ctk.CTkLabel(
             header,
@@ -596,46 +602,97 @@ class UnbackupDialog(ctk.CTkToplevel):
             text=t("unbackup_desc"),
             font=ctk.CTkFont(size=12),
             text_color="gray",
-            wraplength=560,
+            wraplength=580,
             justify="left"
         ).pack(anchor="w", pady=(4, 0))
 
         # Content Frame
         content = ctk.CTkFrame(self, fg_color="#18181b", corner_radius=10)
-        content.pack(fill="both", expand=True, padx=24, pady=10)
+        content.pack(fill="both", expand=True, padx=24, pady=8)
 
-        # Account & Stats Box
+        # 1. Account & Scan Status Box
         stats_box = ctk.CTkFrame(content, fg_color="#27272a", corner_radius=8)
-        stats_box.pack(fill="x", padx=16, pady=(16, 12))
+        stats_box.pack(fill="x", padx=16, pady=(14, 8))
 
         ctk.CTkLabel(
             stats_box,
             text=f"👤 Tài khoản: {self.email}",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#ffffff"
-        ).pack(anchor="w", padx=14, pady=(10, 4))
+        ).pack(anchor="w", padx=14, pady=(8, 2))
 
-        count = self.info["total_files"]
-        gb = self.info["total_gb"]
-        album_cnt = self.info["album_count"]
-
-        ctk.CTkLabel(
+        # Live folder scan status
+        self.lbl_folder_stat = ctk.CTkLabel(
             stats_box,
-            text=t("unbackup_stat_files", count=count, gb=gb),
+            text="🔍 Đang tự động quét ảnh/video trên máy tính...",
             font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#38bdf8"
-        ).pack(anchor="w", padx=14, pady=2)
+            text_color="#fbbf24",
+            anchor="w",
+            wraplength=560,
+            justify="left"
+        )
+        self.lbl_folder_stat.pack(anchor="w", padx=14, pady=2)
+
+        # DB history count
+        db_cnt = self.info["total_files"]
+        db_gb = self.info["total_gb"]
+        self.lbl_db_stat = ctk.CTkLabel(
+            stats_box,
+            text=f"💾 Lịch sử ứng dụng đã ghi nhận: {db_cnt:,} file ({db_gb:.2f} GB)",
+            font=ctk.CTkFont(size=12),
+            text_color="#a1a1aa",
+            anchor="w"
+        )
+        self.lbl_db_stat.pack(anchor="w", padx=14, pady=(2, 8))
+
+        # 2. Scope Selection Box
+        scope_box = ctk.CTkFrame(content, fg_color="#27272a", corner_radius=8)
+        scope_box.pack(fill="x", padx=16, pady=4)
 
         ctk.CTkLabel(
-            stats_box,
-            text=t("unbackup_stat_albums", count=album_cnt),
-            font=ctk.CTkFont(size=12),
-            text_color="#a1a1aa"
-        ).pack(anchor="w", padx=14, pady=(2, 10))
+            scope_box,
+            text="🎯 Phạm vi huỷ sao lưu:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#f4f4f5"
+        ).pack(anchor="w", padx=14, pady=(8, 4))
 
-        # Mode Selection
+        self.scope_var = ctk.StringVar(value="folder")
+
+        self.rb_scope_folder = ctk.CTkRadioButton(
+            scope_box,
+            text=t("unbackup_scope_folder", count=0),
+            value="folder",
+            variable=self.scope_var,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.rb_scope_folder.pack(anchor="w", padx=14, pady=2)
+
+        self.rb_scope_db = ctk.CTkRadioButton(
+            scope_box,
+            text=t("unbackup_scope_db", count=db_cnt),
+            value="db",
+            variable=self.scope_var,
+            font=ctk.CTkFont(size=12),
+            text_color="#e4e4e7"
+        )
+        self.rb_scope_db.pack(anchor="w", padx=14, pady=2)
+
+        # Button to browse custom folder
+        self.btn_browse = ctk.CTkButton(
+            scope_box,
+            text=t("btn_choose_other_folder"),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            height=28,
+            font=ctk.CTkFont(size=11),
+            command=self._choose_custom_folder
+        )
+        self.btn_browse.pack(anchor="w", padx=14, pady=(4, 8))
+
+        # 3. Mode Selection (Trash vs Permanent)
         mode_box = ctk.CTkFrame(content, fg_color="#27272a", corner_radius=8)
-        mode_box.pack(fill="x", padx=16, pady=6)
+        mode_box.pack(fill="x", padx=16, pady=4)
 
         self.mode_var = ctk.StringVar(value="trash")
 
@@ -647,16 +704,16 @@ class UnbackupDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#f4f4f5"
         )
-        rb_trash.pack(anchor="w", padx=14, pady=(10, 2))
+        rb_trash.pack(anchor="w", padx=14, pady=(8, 2))
 
         ctk.CTkLabel(
             mode_box,
             text=t("unbackup_mode_trash_desc"),
             font=ctk.CTkFont(size=11),
             text_color="#9ca3af",
-            wraplength=520,
+            wraplength=540,
             justify="left"
-        ).pack(anchor="w", padx=36, pady=(0, 8))
+        ).pack(anchor="w", padx=36, pady=(0, 4))
 
         rb_perm = ctk.CTkRadioButton(
             mode_box,
@@ -673,26 +730,26 @@ class UnbackupDialog(ctk.CTkToplevel):
             text=t("unbackup_mode_permanent_desc"),
             font=ctk.CTkFont(size=11),
             text_color="#9ca3af",
-            wraplength=520,
+            wraplength=540,
             justify="left"
-        ).pack(anchor="w", padx=36, pady=(0, 10))
+        ).pack(anchor="w", padx=36, pady=(0, 8))
 
-        # Safety Notice Box
+        # 4. Safety Notice Box
         safety_box = ctk.CTkFrame(content, fg_color="#064e3b", border_width=1, border_color="#059669", corner_radius=8)
-        safety_box.pack(fill="x", padx=16, pady=10)
+        safety_box.pack(fill="x", padx=16, pady=6)
 
         ctk.CTkLabel(
             safety_box,
             text=t("unbackup_safety_notice"),
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#a7f3d0",
-            wraplength=530,
+            wraplength=550,
             justify="left"
-        ).pack(anchor="w", padx=12, pady=8)
+        ).pack(anchor="w", padx=12, pady=6)
 
         # Progress bar (Hidden initially)
         self.progress_frame = ctk.CTkFrame(content, fg_color="transparent")
-        self.progress_frame.pack(fill="x", padx=16, pady=4)
+        self.progress_frame.pack(fill="x", padx=16, pady=2)
 
         self.progress_bar = ctk.CTkProgressBar(self.progress_frame, height=10)
         self.progress_bar.set(0)
@@ -705,14 +762,14 @@ class UnbackupDialog(ctk.CTkToplevel):
 
         # Action Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=24, pady=(10, 20))
+        btn_frame.pack(fill="x", padx=24, pady=(8, 16))
 
         self.btn_cancel = ctk.CTkButton(
             btn_frame,
             text=t("btn_cancel"),
             fg_color="#3f3f46",
             hover_color="#52525b",
-            height=40,
+            height=38,
             width=100,
             command=self.destroy
         )
@@ -724,50 +781,175 @@ class UnbackupDialog(ctk.CTkToplevel):
             fg_color="#dc2626",
             hover_color="#b91c1c",
             font=ctk.CTkFont(size=13, weight="bold"),
-            height=40,
+            height=38,
             command=self._start_unbackup
         )
         self.btn_start.pack(side="right", fill="x", expand=True)
 
-        if self.info["total_files"] == 0:
-            self.btn_start.configure(state="disabled")
+    def _start_folder_scan(self):
+        sync_folders = self.config_mgr.config.get("sync_folders", [])
+        if not sync_folders:
+            self.lbl_folder_stat.configure(
+                text="Chưa có thư mục đồng bộ nào được thiết lập. Hãy chọn thư mục bên dưới.",
+                text_color="#a1a1aa"
+            )
+            self.scope_var.set("db")
+            if self.info["total_files"] == 0:
+                self.btn_start.configure(state="disabled")
+            return
+
+        folder_names = ", ".join([Path(f).name for f in sync_folders])
+        self.lbl_folder_stat.configure(
+            text=t("unbackup_scan_machine", folder=folder_names),
+            text_color="#fbbf24"
+        )
+
+        def scan_worker():
+            found = []
+            for s in sync_folders:
+                p = Path(s)
+                if p.exists() and p.is_dir():
+                    try:
+                        for root, _, files in os.walk(p):
+                            for f in files:
+                                ext = os.path.splitext(f)[1].lower()
+                                if ext in SUPPORTED_EXTENSIONS:
+                                    found.append(Path(root) / f)
+                    except Exception:
+                        pass
+
+            self.after(0, lambda: self._on_folder_scan_finished(found, folder_names))
+
+        threading.Thread(target=scan_worker, daemon=True).start()
+
+    def _on_folder_scan_finished(self, found: list, folder_names: str):
+        self._folder_files = found
+        cnt = len(found)
+        if cnt > 0:
+            self.lbl_folder_stat.configure(
+                text=t("unbackup_found_folder_files", count=cnt, folder=folder_names),
+                text_color="#4ade80"
+            )
+            self.rb_scope_folder.configure(
+                text=t("unbackup_scope_folder", count=cnt),
+                state="normal"
+            )
+            self.scope_var.set("folder")
+            self.btn_start.configure(state="normal")
+        else:
+            self.lbl_folder_stat.configure(
+                text=f"Không tìm thấy ảnh/video nào trong {folder_names}",
+                text_color="#a1a1aa"
+            )
+            self.scope_var.set("db")
+            if self.info["total_files"] == 0:
+                self.btn_start.configure(state="disabled")
+
+    def _choose_custom_folder(self):
+        f = filedialog.askdirectory(parent=self, title=t("dialog_select_folder_title"))
+        if not f:
+            return
+        p = Path(f)
+        self.lbl_folder_stat.configure(
+            text=f"Đang quét thư mục: {p.name}...",
+            text_color="#fbbf24"
+        )
+
+        def scan_worker():
+            found = []
+            if p.exists() and p.is_dir():
+                try:
+                    for root, _, files in os.walk(p):
+                        for file in files:
+                            ext = os.path.splitext(file)[1].lower()
+                            if ext in SUPPORTED_EXTENSIONS:
+                                found.append(Path(root) / file)
+                except Exception:
+                    pass
+            self.after(0, lambda: self._on_folder_scan_finished(found, p.name))
+
+        threading.Thread(target=scan_worker, daemon=True).start()
 
     def _start_unbackup(self):
         if self._is_running:
             return
 
-        hashes = self.info["hashes"]
-        if not hashes:
+        scope = self.scope_var.get()
+        permanent = (self.mode_var.get() == "permanent")
+
+        # Determine target list
+        if scope == "folder" and self._folder_files:
+            target_mode = "folder"
+            total_items = len(self._folder_files)
+        elif self.info["hashes"]:
+            target_mode = "db"
+            total_items = len(self.info["hashes"])
+        elif self._folder_files:
+            target_mode = "folder"
+            total_items = len(self._folder_files)
+        else:
             messagebox.showinfo(t("alert_info"), t("unbackup_no_items"), parent=self)
             return
 
         self._is_running = True
         self.btn_start.configure(state="disabled", text="⏳ Đang tiến hành huỷ sao lưu...")
         self.btn_cancel.configure(state="disabled")
+        self.btn_browse.configure(state="disabled")
 
         self.progress_bar.pack(fill="x", pady=(4, 4))
         self.lbl_progress.pack(anchor="w", pady=(0, 4))
         self.progress_bar.set(0)
 
-        permanent = (self.mode_var.get() == "permanent")
-
         def run():
             try:
-                def progress(curr, total):
-                    pct = curr / total if total > 0 else 0
-                    txt = t("unbackup_in_progress", current=curr, total=total, percent=int(pct * 100))
-                    self.after(0, lambda: self._update_ui_progress(pct, txt))
+                processed = 0
+                success_total = 0
 
-                success_cnt, err_cnt = self.uploader.unbackup_remote_media(
-                    sha1_hashes=hashes,
-                    permanent=permanent,
-                    progress_callback=progress
-                )
+                if target_mode == "folder":
+                    batch_size = 500
+                    files_list = self._folder_files
+                    total_cnt = len(files_list)
+
+                    for i in range(0, total_cnt, batch_size):
+                        chunk = files_list[i : i + batch_size]
+                        chunk_hashes = []
+                        for file_path in chunk:
+                            try:
+                                h = UploadDatabase.calculate_sha1(file_path)
+                                chunk_hashes.append(h)
+                            except Exception:
+                                continue
+
+                        if chunk_hashes:
+                            s_cnt, _ = self.uploader.unbackup_remote_media(
+                                sha1_hashes=chunk_hashes,
+                                permanent=permanent
+                            )
+                            success_total += s_cnt
+
+                        processed = min(i + len(chunk), total_cnt)
+                        pct = processed / total_cnt if total_cnt > 0 else 0
+                        txt = t("unbackup_in_progress", current=processed, total=total_cnt, percent=int(pct * 100))
+                        self.after(0, lambda p=pct, m=txt: self._update_ui_progress(p, m))
+                else:
+                    # Database hashes
+                    hashes = self.info["hashes"]
+                    def progress(curr, total):
+                        pct = curr / total if total > 0 else 0
+                        txt = t("unbackup_in_progress", current=curr, total=total, percent=int(pct * 100))
+                        self.after(0, lambda p=pct, m=txt: self._update_ui_progress(p, m))
+
+                    s_cnt, _ = self.uploader.unbackup_remote_media(
+                        sha1_hashes=hashes,
+                        permanent=permanent,
+                        progress_callback=progress
+                    )
+                    success_total = s_cnt
 
                 # Clear DB records for this account
                 self.db.clear_account_data(self.email)
 
-                self.after(0, lambda: self._on_success(success_cnt))
+                self.after(0, lambda: self._on_success(success_total))
             except Exception as e:
                 self.after(0, lambda: self._on_error(str(e)))
 
@@ -792,10 +974,12 @@ class UnbackupDialog(ctk.CTkToplevel):
         self._is_running = False
         self.btn_start.configure(state="normal", text=t("unbackup_btn_start"))
         self.btn_cancel.configure(state="normal")
+        self.btn_browse.configure(state="normal")
         messagebox.showerror(
             t("alert_error"),
             t("unbackup_error", error=err),
             parent=self
         )
+
 
 

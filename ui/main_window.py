@@ -681,6 +681,13 @@ class MainWindow(ctk.CTk):
                 self._refresh_stats()
             elif evt_type == "file_skipped" and file_path:
                 self.upload_tray.mark_completed(file_path, was_skipped=True)
+            elif evt_type == "file_skipped_fast":
+                self._refresh_stats()
+                if rem_queue > 0:
+                    if get_language() == "en":
+                        self.lbl_current_file.configure(text=f"⚡ Fast verified on Cloud • {rem_queue} remaining in queue")
+                    else:
+                        self.lbl_current_file.configure(text=f"⚡ Đã có sẵn trên Cloud • Còn lại {rem_queue} trong hàng đợi")
             elif evt_type == "file_error" and file_path:
                 err_lbl = "Error" if get_language() == "en" else "Lỗi"
                 self.upload_tray.mark_error(file_path, data.get("error", err_lbl))

@@ -731,6 +731,7 @@ class MainWindow(ctk.CTk):
                 quality=quality,
                 threads=threads,
                 auto_album=auto_album,
+                log_callback=self.append_log,
                 log_func=self.append_log,
                 event_callback=self._handle_uploader_event
             )

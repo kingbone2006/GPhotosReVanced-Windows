@@ -33,9 +33,11 @@ class PhotoUploader:
         db: UploadDatabase,
         event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         log_callback: Optional[Callable[[str, str], None]] = None,
+        log_func: Optional[Callable[[str, str], None]] = None,
         threads: int = 4,
         quality: str = "original",
         auto_album: bool = False,
+        **kwargs
     ):
         self.auth_data = auth_data.strip()
         self.account_email = ""
@@ -48,7 +50,7 @@ class PhotoUploader:
 
         self.db = db
         self.event_callback = event_callback
-        self.log_callback = log_callback
+        self.log_callback = log_callback or log_func
         self.threads = max(1, min(threads, 10))
         self.quality = quality  # "original" (Pixel XL Unlimited) or "saver"
         self.auto_album = auto_album

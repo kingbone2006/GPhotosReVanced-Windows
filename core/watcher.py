@@ -79,9 +79,12 @@ class PhotoEventHandler(FileSystemEventHandler):
 
             if file_path.exists() and file_path.stat().st_size > 0:
                 if not self.uploader.is_queued_or_active(file_path):
-                    self._log(f"[Tự động phát hiện] Thêm file mới vào hàng đợi: {file_path.name}", "INFO")
                     self.uploader.add_to_queue([file_path])
-                    self.uploader.start_background_worker()
+                    if not getattr(self.uploader, "_is_paused", False):
+                        self._log(f"[Tự động phát hiện] Thêm file mới vào hàng đợi: {file_path.name}", "INFO")
+                        self.uploader.start_background_worker()
+                    else:
+                        self._log(f"[Tự động phát hiện] Đã thêm {file_path.name} vào hàng đợi (Đang tạm dừng, bấm Bắt đầu để tải).", "INFO")
         finally:
             with self._lock:
                 self._pending_files.discard(str(file_path))

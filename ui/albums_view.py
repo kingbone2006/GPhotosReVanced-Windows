@@ -20,6 +20,10 @@ from core.i18n import t
 from ui.upload_tray import get_file_thumbnail
 
 
+MAX_ALBUMS_PER_PAGE = 30   # Render at most 30 album cards at once to prevent UI freeze
+MAX_PHOTOS_PER_PAGE = 60   # Render at most 60 photo cards at once
+
+
 class AlbumsView(ctk.CTkFrame):
     """
     Main container for Albums & Photos Explorer tab.
@@ -37,6 +41,12 @@ class AlbumsView(ctk.CTkFrame):
         self._current_viewing_album: Optional[str] = None
         self._downloader: Optional[AlbumDownloader] = None
         self._active_mode = "albums"  # "albums" or "photos"
+        self._albums_page = 0    # Current page for lazy-loaded album grid
+        self._photos_page = 0    # Current page for lazy-loaded photos grid
+        self._all_photos_list: List[Dict[str, Any]] = []
+        self._album_photos_list: List[Dict[str, Any]] = []
+        self._album_photos_page = 0
+        self._is_loading_more = False
 
         # Build UI Structure
         self._build_header()
@@ -57,8 +67,11 @@ class AlbumsView(ctk.CTkFrame):
         self.photos_container = ctk.CTkFrame(self.content_container, fg_color="#18181b", corner_radius=8)
         self._build_photos_viewer_ui()
 
-        # Load initial data
-        self.after(300, self.load_albums)
+        # Infinite Scroll Hooks for albums & photos
+        self._setup_infinite_scroll()
+
+        # Load initial data (deferred to let engine init first)
+        self.after(1500, self.load_albums)
 
     def _build_header(self):
         self.header_frame = ctk.CTkFrame(self, fg_color="#27272a", corner_radius=10)
@@ -85,12 +98,22 @@ class AlbumsView(ctk.CTkFrame):
         self.search_entry = ctk.CTkEntry(
             self.controls_row,
             placeholder_text=t("albums_search_placeholder"),
-            width=300,
+            width=230,
             height=32,
             font=ctk.CTkFont(size=12)
         )
-        self.search_entry.pack(side="left", padx=(0, 10))
+        self.search_entry.pack(side="left", padx=(0, 6))
         self.search_entry.bind("<KeyRelease>", lambda e: self._on_search())
+
+        # Album Filter (Tất cả / Có ảnh / Trống)
+        self.filter_album_type = ctk.CTkSegmentedButton(
+            self.controls_row,
+            values=[t("filter_all_albums"), t("filter_with_photos"), t("filter_empty_albums")],
+            font=ctk.CTkFont(size=11),
+            command=lambda v: self._on_search()
+        )
+        self.filter_album_type.pack(side="left", padx=(0, 8))
+        self.filter_album_type.set(t("filter_all_albums"))
 
         # Select All Checkbox
         self.chk_select_all = ctk.CTkCheckBox(
@@ -99,7 +122,7 @@ class AlbumsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._on_toggle_select_all
         )
-        self.chk_select_all.pack(side="left", padx=8)
+        self.chk_select_all.pack(side="left", padx=6)
 
         # Selected Counter
         self.lbl_selected_counter = ctk.CTkLabel(
@@ -108,7 +131,7 @@ class AlbumsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
             text_color="#a1a1aa"
         )
-        self.lbl_selected_counter.pack(side="left", padx=8)
+        self.lbl_selected_counter.pack(side="left", padx=6)
 
         # Download Selected Button
         self.btn_download_selected = ctk.CTkButton(
@@ -128,27 +151,156 @@ class AlbumsView(ctk.CTkFrame):
             text=t("btn_refresh_albums"),
             fg_color="#3f3f46",
             hover_color="#52525b",
-            width=80,
+            width=75,
             height=32,
             command=self.load_albums
         )
-        self.btn_refresh.pack(side="right", padx=6)
+        self.btn_refresh.pack(side="right", padx=4)
+
+        # Clean Empty Albums Button
+        self.btn_clean_empty = ctk.CTkButton(
+            self.controls_row,
+            text=t("btn_clean_empty_albums"),
+            fg_color="#e11d48",
+            hover_color="#be123c",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_clean_empty_albums
+        )
+        self.btn_clean_empty.pack(side="right", padx=4)
+
+        # Reconcile & Fill Missing Photos to Albums Button
+        self.btn_sync_missing = ctk.CTkButton(
+            self.controls_row,
+            text=t("btn_sync_missing_albums"),
+            fg_color="#d97706",
+            hover_color="#b45309",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_sync_missing_photos_to_albums
+        )
+        self.btn_sync_missing.pack(side="right", padx=4)
 
     def _on_switch_view_mode(self, mode: str):
         if "Ảnh" in mode:
             self._active_mode = "photos"
+            self.filter_album_type.pack_forget()
             self.chk_select_all.pack_forget()
             self.lbl_selected_counter.pack_forget()
             self.btn_download_selected.pack_forget()
+            self.btn_clean_empty.pack_forget()
+            self.btn_sync_missing.pack_forget()
             self.search_entry.configure(placeholder_text="🔍 Tìm ảnh theo tên file...")
             self._render_all_photos_grid()
         else:
             self._active_mode = "albums"
-            self.chk_select_all.pack(side="left", padx=8)
-            self.lbl_selected_counter.pack(side="left", padx=8)
+            self.filter_album_type.pack(side="left", padx=(0, 8), after=self.search_entry)
+            self.chk_select_all.pack(side="left", padx=6)
+            self.lbl_selected_counter.pack(side="left", padx=6)
             self.btn_download_selected.pack(side="right", padx=(6, 0))
+            self.btn_refresh.pack(side="right", padx=4)
+            self.btn_clean_empty.pack(side="right", padx=4)
+            self.btn_sync_missing.pack(side="right", padx=4)
             self.search_entry.configure(placeholder_text=t("albums_search_placeholder"))
             self._render_album_grid()
+
+    def _on_sync_missing_photos_to_albums(self):
+        uploader = self.get_uploader() if self.get_uploader else None
+        if not uploader:
+            messagebox.showwarning(t("alert_warning"), "Engine chưa sẵn sàng hoặc chưa kết nối tài khoản.")
+            return
+
+        self.btn_sync_missing.configure(state="disabled", text=t("btn_sync_missing_albums_scanning"))
+
+        def _bg_check():
+            try:
+                from core.uploader import reconcile_album_photos
+                active_acc = self.config_mgr.get_active_account()
+                email = active_acc.get("email", "") if active_acc else ""
+                sync_folders = self.config_mgr.config.get("sync_folders", [])
+
+                # 1. Sync remote albums to ensure we know all existing cloud albums
+                cloud_albums = uploader.sync_cloud_albums(force=True)
+
+                discrepancies, missing_to_upload, already_uploaded_needing_album = reconcile_album_photos(
+                    scan_roots=sync_folders,
+                    db=self.db,
+                    account_email=email,
+                    api=uploader._client.api if getattr(uploader, "_client", None) else None,
+                    cloud_albums=cloud_albums
+                )
+
+                def _on_result():
+                    self.btn_sync_missing.configure(state="normal", text=t("btn_sync_missing_albums"))
+                    total_missing = len(missing_to_upload) + len(already_uploaded_needing_album)
+
+                    if not discrepancies or total_missing == 0:
+                        messagebox.showinfo(
+                            t("alert_info"),
+                            "✅ Tuyệt vời! Tất cả Album trên Server Google Photos đều đã đồng bộ đủ ảnh và video giống hệt như các thư mục trên máy tính."
+                        )
+                        return
+
+                    existing_count = sum(1 for d in discrepancies if d.get("album_exists_on_cloud"))
+                    new_count = len(discrepancies) - existing_count
+                    missing_upload_vids = sum(d.get("missing_upload_videos", 0) for d in discrepancies)
+                    missing_upload_photos = len(missing_to_upload) - missing_upload_vids
+
+                    confirm = messagebox.askyesno(
+                        "Phát hiện Album cần đồng bộ",
+                        f"Phát hiện {len(discrepancies)} album cần xử lý trên Server Google Photos (thiếu tổng cộng {total_missing:,} file ảnh & video so với máy tính):\n\n"
+                        f"• {existing_count} Album ĐÃ CÓ trên Server: sẽ được THÊM TIẾP file thiếu vào (tuyệt đối không tạo trùng)\n"
+                        f"• {new_count} Album MỚI: chưa có trên Server, sẽ tự động tạo album mới\n"
+                        f"• {len(missing_to_upload):,} file cần tải lên mới: gồm {missing_upload_photos:,} ảnh và {missing_upload_vids:,} video\n"
+                        f"• {len(already_uploaded_needing_album):,} file đã có trên Cloud sẽ gom bù ngay vào đúng Album\n\n"
+                        f"Bạn có muốn bắt đầu tự động tải lên và bù toàn bộ ảnh & video vào các Album này ngay bây giờ không?"
+                    )
+
+                    if confirm:
+                        # Ensure uploader is unpaused so background workers immediately process
+                        uploader.resume()
+
+                        # Notify main window to update button state
+                        try:
+                            mw = self.winfo_toplevel()
+                            if mw and hasattr(mw, "_is_paused"):
+                                mw._is_paused = False
+                                if hasattr(mw, "btn_pause"):
+                                    mw.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706", hover_color="#b45309")
+                                if hasattr(mw, "lbl_stat_status"):
+                                    mw.lbl_stat_status.configure(text=t("status_monitoring"), text_color="#4ade80")
+                        except Exception:
+                            pass
+
+                        # 1. For media already on cloud, queue into album flusher with force=True
+                        for alb_name, m_key in already_uploaded_needing_album:
+                            uploader._queue_for_album(alb_name, m_key, force=True)
+
+                        # 2. For media needing upload, queue to uploader
+                        if missing_to_upload:
+                            added = uploader.add_to_queue(missing_to_upload)
+                            uploader.start_background_worker()
+                            uploader._log(
+                                f"🚀 [Đồng bộ Album] Đã đưa {added:,} file thiếu ({missing_upload_photos:,} ảnh, {missing_upload_vids:,} video) của {len(discrepancies)} album vào hàng đợi tải lên đa luồng!",
+                                "SUCCESS"
+                            )
+                        else:
+                            uploader._start_album_flusher()
+
+                        messagebox.showinfo(
+                            t("alert_info"),
+                            f"Đã bắt đầu tiến trình bù {total_missing:,} ảnh & video cho {len(discrepancies)} album!\nTheo dõi tiến độ tại tab Dashboard."
+                        )
+
+                self.after(0, _on_result)
+
+            except Exception as e:
+                def _on_err():
+                    self.btn_sync_missing.configure(state="normal", text=t("btn_sync_missing_albums"))
+                    messagebox.showerror(t("alert_error"), f"Lỗi khi kiểm tra đồng bộ album:\n{e}")
+                self.after(0, _on_err)
+
+        threading.Thread(target=_bg_check, daemon=True).start()
 
     def _build_photos_viewer_ui(self):
         """Header and scroll area for viewing photos inside an album."""
@@ -205,12 +357,93 @@ class AlbumsView(ctk.CTkFrame):
         )
         self.photos_scroll.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
+    def _setup_infinite_scroll(self):
+        """Hook into canvas scroll events to automatically load more content ahead of reaching the bottom."""
+        try:
+            # 1. Main container (Albums or All Photos stream)
+            orig_set_albums = self.albums_scroll._scrollbar.set
+            def _on_albums_scroll(first, last):
+                orig_set_albums(first, last)
+                try:
+                    # Trigger proactive pre-loading when scrollbar reaches >= 75%
+                    if float(last) >= 0.75:
+                        self._check_auto_load_more()
+                except Exception:
+                    pass
+
+            self.albums_scroll._parent_canvas.configure(yscrollcommand=_on_albums_scroll)
+
+            # 2. Photos container (inside Album Detail view)
+            orig_set_photos = self.photos_scroll._scrollbar.set
+            def _on_photos_scroll(first, last):
+                orig_set_photos(first, last)
+                try:
+                    if float(last) >= 0.75:
+                        self._check_auto_load_more_album_photos()
+                except Exception:
+                    pass
+
+            self.photos_scroll._parent_canvas.configure(yscrollcommand=_on_photos_scroll)
+        except Exception:
+            pass
+
+    def _check_auto_load_more(self):
+        """Automatically load the next batch of albums or photos when scrolling."""
+        if self._is_loading_more:
+            return
+
+        if self._active_mode == "albums":
+            start = self._albums_page * MAX_ALBUMS_PER_PAGE
+            end = min(start + MAX_ALBUMS_PER_PAGE, len(self._filtered_albums))
+            if end < len(self._filtered_albums):
+                self._is_loading_more = True
+                self._albums_page += 1
+                self._render_album_page()
+                self.after(300, lambda: setattr(self, '_is_loading_more', False))
+
+        elif self._active_mode == "photos":
+            start = self._photos_page * MAX_PHOTOS_PER_PAGE
+            end = min(start + MAX_PHOTOS_PER_PAGE, len(self._all_photos_list))
+            if end < len(self._all_photos_list):
+                self._is_loading_more = True
+                self._photos_page += 1
+                self._render_photos_page()
+                self.after(300, lambda: setattr(self, '_is_loading_more', False))
+
+    def _check_auto_load_more_album_photos(self):
+        """Automatically load the next batch of photos in the album detail view."""
+        if self._is_loading_more:
+            return
+
+        start = self._album_photos_page * MAX_PHOTOS_PER_PAGE
+        end = min(start + MAX_PHOTOS_PER_PAGE, len(self._album_photos_list))
+        if end < len(self._album_photos_list):
+            self._is_loading_more = True
+            self._album_photos_page += 1
+            self._render_album_detail_photos_page()
+            self.after(300, lambda: setattr(self, '_is_loading_more', False))
+
     def load_albums(self):
         """Load all albums from database and refresh grid."""
+        import threading
         active_acc = self.config_mgr.get_active_account()
         email = active_acc.get("email", "") if active_acc else ""
-        self._all_albums = self.db.get_all_albums(email)
-        self._on_search()
+
+        def _bg_load():
+            uploader = self.get_uploader() if self.get_uploader else None
+            if uploader and hasattr(uploader, "sync_cloud_albums"):
+                try:
+                    uploader.sync_cloud_albums()
+                except Exception:
+                    pass
+            sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
+            albums = self.db.get_all_albums(email, sync_roots=sync_folders)
+            def _update_ui():
+                self._all_albums = albums
+                self._on_search()
+            self.after(0, _update_ui)
+
+        threading.Thread(target=_bg_load, daemon=True).start()
 
     def _on_search(self):
         if self._active_mode == "photos":
@@ -218,13 +451,72 @@ class AlbumsView(ctk.CTkFrame):
             return
 
         query = self.search_entry.get().strip().lower()
-        if not query:
-            self._filtered_albums = list(self._all_albums)
-        else:
-            self._filtered_albums = [
-                a for a in self._all_albums if query in a.get("album_name", "").lower()
-            ]
+        flt = getattr(self, "filter_album_type", None)
+        flt_val = flt.get() if flt else ""
+
+        filtered = list(self._all_albums)
+
+        # Filter by category: All, Has Photos, or Empty
+        if flt_val == t("filter_with_photos") or "Có ảnh" in flt_val or "With" in flt_val:
+            filtered = [a for a in filtered if a.get("photo_count", 0) > 0]
+        elif flt_val == t("filter_empty_albums") or "Trống" in flt_val or "Empty" in flt_val:
+            filtered = [a for a in filtered if a.get("photo_count", 0) <= 0]
+
+        # Search query by name
+        if query:
+            filtered = [a for a in filtered if query in a.get("album_name", "").lower()]
+
+        self._filtered_albums = filtered
         self._render_album_grid()
+
+    def _on_clean_empty_albums(self):
+        active_acc = self.config_mgr.get_active_account()
+        email = active_acc.get("email", "") if active_acc else ""
+
+        empty_albums = [a for a in self._all_albums if a.get("photo_count", 0) <= 0]
+        if not empty_albums:
+            messagebox.showinfo(
+                "Dọn dẹp Album",
+                "✅ Tuyệt vời! Thư viện hiện không có bất kỳ Album trống (0 ảnh) nào."
+            )
+            return
+
+        preview_lines = "\n".join([f"• {a.get('album_name', 'Unnamed')}" for a in empty_albums[:10]])
+        if len(empty_albums) > 10:
+            preview_lines += f"\n... và {len(empty_albums) - 10} album rỗng khác."
+
+        confirm = messagebox.askyesno(
+            "Xác nhận Dọn dẹp Album trống",
+            f"Phát hiện {len(empty_albums)} album rỗng (0 ảnh) không chứa dữ liệu:\n\n"
+            f"{preview_lines}\n\n"
+            f"Bạn có muốn xoá và dọn dẹp toàn bộ {len(empty_albums)} album rỗng này khỏi ứng dụng không?\n\n"
+            f"• Các album rỗng sẽ bị xoá khỏi danh sách quản lý\n"
+            f"• Ứng dụng sẽ tự động bỏ qua để không bao giờ tải lại các vỏ rỗng này."
+        )
+
+        if not confirm:
+            return
+
+        cleaned_names = self.db.clean_empty_albums(email)
+        for name in cleaned_names:
+            self._selected_album_names.discard(name)
+
+        uploader = self.get_uploader() if self.get_uploader else None
+        if uploader and hasattr(uploader, "_cloud_albums_cache"):
+            for name in cleaned_names:
+                uploader._cloud_albums_cache.pop(name, None)
+
+        self.load_albums()
+
+        open_web = messagebox.askyesno(
+            "Dọn dẹp hoàn tất",
+            f"✅ Đã dọn dẹp thành công {len(cleaned_names)} album rỗng khỏi ứng dụng!\n\n"
+            f"💡 Lưu ý: Trên máy chủ Google Photos, các vỏ album rỗng (0 ảnh) được Google lưu lại theo quy định của họ.\n\n"
+            f"Bạn có muốn mở trang Web photos.google.com/albums để kiểm tra hoặc xoá hẳn vỏ rỗng trên Cloud không?"
+        )
+        if open_web:
+            import webbrowser
+            webbrowser.open("https://photos.google.com/albums")
 
     def _render_album_grid(self):
         for widget in self.albums_scroll.winfo_children():
@@ -250,8 +542,27 @@ class AlbumsView(ctk.CTkFrame):
             lbl_empty.pack(expand=True, pady=60)
             return
 
+        # Reset page and render first page
+        self._albums_page = 0
+        self._render_album_page()
+
+    def _render_album_page(self):
+        """Render the next page of albums (MAX_ALBUMS_PER_PAGE at a time)."""
+        start = self._albums_page * MAX_ALBUMS_PER_PAGE
+        end = min(start + MAX_ALBUMS_PER_PAGE, len(self._filtered_albums))
+        page_albums = self._filtered_albums[start:end]
+
+        if not page_albums:
+            return
+
+        # Remove existing "Load More" button if present
+        for widget in self.albums_scroll.winfo_children():
+            if hasattr(widget, '_is_load_more_btn'):
+                widget.destroy()
+
         cols = 3
-        for idx, album in enumerate(self._filtered_albums):
+        for idx_in_page, album in enumerate(page_albums):
+            idx = start + idx_in_page
             album_name = album.get("album_name", "Untitled")
             photo_count = album.get("photo_count", 0)
             cover_path = album.get("cover_path", "")
@@ -350,8 +661,38 @@ class AlbumsView(ctk.CTkFrame):
             )
             btn_dl.pack(side="right")
 
+        # Add status indicator / auto-load hook if there are more albums to show
+        remaining = len(self._filtered_albums) - end
+        next_row = (end // cols) + 1
+        if remaining > 0:
+            load_more = ctk.CTkButton(
+                self.albums_scroll,
+                text=f"⏳ Tự động tải thêm khi cuộn... (còn {remaining} album, bấm để tải ngay)",
+                fg_color="#27272a",
+                hover_color="#3f3f46",
+                text_color="#9ca3af",
+                font=ctk.CTkFont(size=11),
+                height=32,
+                command=self._load_more_albums
+            )
+            load_more._is_load_more_btn = True
+            load_more.grid(row=next_row, column=0, columnspan=cols, padx=8, pady=10, sticky="ew")
+        elif len(self._filtered_albums) > MAX_ALBUMS_PER_PAGE:
+            end_lbl = ctk.CTkLabel(
+                self.albums_scroll,
+                text=f"✅ Đã hiển thị toàn bộ {len(self._filtered_albums)} album",
+                font=ctk.CTkFont(size=11),
+                text_color="#71717a"
+            )
+            end_lbl._is_load_more_btn = True
+            end_lbl.grid(row=next_row, column=0, columnspan=cols, padx=8, pady=10, sticky="ew")
+
+    def _load_more_albums(self):
+        """Load the next page of albums."""
+        self._check_auto_load_more()
+
     def _render_all_photos_grid(self):
-        """Render all backed-up photos in a responsive gallery stream."""
+        """Render all backed-up photos in a responsive gallery stream with pagination."""
         for widget in self.albums_scroll.winfo_children():
             widget.destroy()
 
@@ -363,6 +704,9 @@ class AlbumsView(ctk.CTkFrame):
         if query:
             photos = [p for p in photos if query in p.get("filename", "").lower()]
 
+        self._all_photos_list = photos
+        self._photos_page = 0
+
         if not photos:
             lbl_empty = ctk.CTkLabel(
                 self.albums_scroll,
@@ -373,8 +717,25 @@ class AlbumsView(ctk.CTkFrame):
             lbl_empty.pack(expand=True, pady=60)
             return
 
+        self._render_photos_page()
+
+    def _render_photos_page(self):
+        """Render the next page of photos (MAX_PHOTOS_PER_PAGE at a time)."""
+        start = self._photos_page * MAX_PHOTOS_PER_PAGE
+        end = min(start + MAX_PHOTOS_PER_PAGE, len(self._all_photos_list))
+        page_photos = self._all_photos_list[start:end]
+
+        if not page_photos:
+            return
+
+        # Remove existing "Load More" button if present
+        for widget in self.albums_scroll.winfo_children():
+            if hasattr(widget, '_is_load_more_btn'):
+                widget.destroy()
+
         cols = 4
-        for idx, photo in enumerate(photos):
+        for idx_in_page, photo in enumerate(page_photos):
+            idx = start + idx_in_page
             filename = photo.get("filename", "photo.jpg")
             local_path = photo.get("local_path", "")
             fsize = photo.get("file_size", 0)
@@ -417,6 +778,36 @@ class AlbumsView(ctk.CTkFrame):
                 anchor="w"
             ).pack(fill="x", padx=6, pady=(0, 6))
 
+        # Add status indicator / auto-load hook if there are more photos
+        remaining = len(self._all_photos_list) - end
+        next_row = (end // cols) + 1
+        if remaining > 0:
+            load_more = ctk.CTkButton(
+                self.albums_scroll,
+                text=f"⏳ Tự động tải thêm khi cuộn... (còn {remaining} ảnh, bấm để tải ngay)",
+                fg_color="#27272a",
+                hover_color="#3f3f46",
+                text_color="#9ca3af",
+                font=ctk.CTkFont(size=11),
+                height=32,
+                command=self._load_more_photos
+            )
+            load_more._is_load_more_btn = True
+            load_more.grid(row=next_row, column=0, columnspan=cols, padx=8, pady=10, sticky="ew")
+        elif len(self._all_photos_list) > MAX_PHOTOS_PER_PAGE:
+            end_lbl = ctk.CTkLabel(
+                self.albums_scroll,
+                text=f"✅ Đã hiển thị toàn bộ {len(self._all_photos_list)} ảnh",
+                font=ctk.CTkFont(size=11),
+                text_color="#71717a"
+            )
+            end_lbl._is_load_more_btn = True
+            end_lbl.grid(row=next_row, column=0, columnspan=cols, padx=8, pady=10, sticky="ew")
+
+    def _load_more_photos(self):
+        """Load the next page of photos."""
+        self._check_auto_load_more()
+
     def _toggle_album_selection(self, album_name: str):
         if album_name in self._selected_album_names:
             self._selected_album_names.remove(album_name)
@@ -448,19 +839,32 @@ class AlbumsView(ctk.CTkFrame):
     # =========================================================================
     def _open_album_photos(self, album_name: str):
         self._current_viewing_album = album_name
+        self._is_loading_more = False
         active_acc = self.config_mgr.get_active_account()
         email = active_acc.get("email", "") if active_acc else ""
-        photos = self.db.get_album_photos(album_name, email)
+        sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
+        photos = self.db.get_album_photos(album_name, email, sync_roots=sync_folders)
 
         self.albums_scroll.pack_forget()
         self.photos_container.pack(fill="both", expand=True)
 
+        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"}
+        num_vids = sum(1 for p in photos if Path(p.get("filename", "")).suffix.lower() in video_exts)
+        num_imgs = len(photos) - num_vids
+        if num_vids > 0:
+            count_str = f"{len(photos)} mục: {num_imgs} ảnh, {num_vids} video"
+        else:
+            count_str = f"{len(photos)} ảnh"
+
         self.lbl_viewing_album_title.configure(
-            text=f"📁 {album_name} ({len(photos)} ảnh)"
+            text=f"📁 {album_name} ({count_str})"
         )
 
         for widget in self.photos_scroll.winfo_children():
             widget.destroy()
+
+        self._album_photos_list = photos
+        self._album_photos_page = 0
 
         if not photos:
             lbl_empty = ctk.CTkLabel(
@@ -472,8 +876,25 @@ class AlbumsView(ctk.CTkFrame):
             lbl_empty.pack(expand=True, pady=40)
             return
 
+        self._render_album_detail_photos_page()
+
+    def _render_album_detail_photos_page(self):
+        """Render the next page of photos inside the current album view."""
+        start = self._album_photos_page * MAX_PHOTOS_PER_PAGE
+        end = min(start + MAX_PHOTOS_PER_PAGE, len(self._album_photos_list))
+        page_photos = self._album_photos_list[start:end]
+
+        if not page_photos:
+            return
+
+        # Remove existing indicator or button
+        for widget in self.photos_scroll.winfo_children():
+            if hasattr(widget, '_is_load_more_btn'):
+                widget.destroy()
+
         cols = 4
-        for idx, photo in enumerate(photos):
+        for idx_in_page, photo in enumerate(page_photos):
+            idx = start + idx_in_page
             filename = photo.get("filename", "photo.jpg")
             local_path = photo.get("local_path", "")
             fsize = photo.get("file_size", 0)
@@ -490,7 +911,11 @@ class AlbumsView(ctk.CTkFrame):
             t_box.pack(fill="x", padx=6, pady=(6, 2))
             t_box.pack_propagate(False)
 
-            lbl_img = ctk.CTkLabel(t_box, text="📷", font=ctk.CTkFont(size=24), cursor="hand2")
+            video_exts = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"}
+            is_vid = Path(filename).suffix.lower() in video_exts
+            default_icon = "🎬" if is_vid else "📷"
+
+            lbl_img = ctk.CTkLabel(t_box, text=default_icon, font=ctk.CTkFont(size=26), cursor="hand2")
             lbl_img.place(relx=0.5, rely=0.5, anchor="center")
 
             if local_path and Path(local_path).exists():
@@ -498,6 +923,8 @@ class AlbumsView(ctk.CTkFrame):
                 t_img = get_file_thumbnail(Path(local_path), size=(120, 100))
                 if t_img:
                     lbl_img.configure(image=t_img, text="")
+                elif is_vid:
+                    lbl_img.configure(text="🎬 VIDEO", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38bdf8")
 
             disp_fname = filename if len(filename) <= 18 else filename[:14] + "..." + Path(filename).suffix
             ctk.CTkLabel(
@@ -515,6 +942,36 @@ class AlbumsView(ctk.CTkFrame):
                 text_color="#9ca3af",
                 anchor="w"
             ).pack(fill="x", padx=6, pady=(0, 6))
+
+        # Add status indicator / auto-load hook if there are more photos
+        remaining = len(self._album_photos_list) - end
+        next_row = (end // cols) + 1
+        if remaining > 0:
+            load_more = ctk.CTkButton(
+                self.photos_scroll,
+                text=f"⏳ Tự động tải thêm khi cuộn... (còn {remaining} ảnh, bấm để tải ngay)",
+                fg_color="#27272a",
+                hover_color="#3f3f46",
+                text_color="#9ca3af",
+                font=ctk.CTkFont(size=11),
+                height=32,
+                command=self._load_more_album_photos
+            )
+            load_more._is_load_more_btn = True
+            load_more.grid(row=next_row, column=0, columnspan=cols, padx=8, pady=10, sticky="ew")
+        elif len(self._album_photos_list) > MAX_PHOTOS_PER_PAGE:
+            end_lbl = ctk.CTkLabel(
+                self.photos_scroll,
+                text=f"✅ Đã hiển thị toàn bộ {len(self._album_photos_list)} ảnh",
+                font=ctk.CTkFont(size=11),
+                text_color="#71717a"
+            )
+            end_lbl._is_load_more_btn = True
+            end_lbl.grid(row=next_row, column=0, columnspan=cols, padx=8, pady=10, sticky="ew")
+
+    def _load_more_album_photos(self):
+        """Load the next page of album detail photos."""
+        self._check_auto_load_more_album_photos()
 
     def _open_file_system(self, file_path: str):
         try:
@@ -554,6 +1011,7 @@ class AlbumsView(ctk.CTkFrame):
         self.photos_container.pack_forget()
         self.albums_scroll.pack(fill="both", expand=True)
         self._current_viewing_album = None
+        self._is_loading_more = False
 
     # =========================================================================
     # Downloading Albums
@@ -579,10 +1037,11 @@ class AlbumsView(ctk.CTkFrame):
         dest_root = Path(dest)
         active_acc = self.config_mgr.get_active_account()
         email = active_acc.get("email", "") if active_acc else ""
+        sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
 
         payload = []
         for name in album_names:
-            photos = self.db.get_album_photos(name, email)
+            photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
             payload.append({
                 "album_name": name,
                 "items": photos

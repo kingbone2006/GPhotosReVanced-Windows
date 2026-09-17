@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import threading
+import collections
 from pathlib import Path
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -44,9 +45,20 @@ class MainWindow(ctk.CTk):
         self.uploader: PhotoUploader = None
         self.watcher: FolderWatcher = None
 
-        # UI State
-        self._is_paused = False
+        # UI State & High-Performance Decoupled Pipeline
+        self._is_paused = True
         self._last_progress_time = {}
+        self._pending_stats_refresh = False
+        self._last_stats_refresh = 0
+        self._skipped_fast_count = 0
+
+        # Thread-Safe Queues for Ultra-Smooth Decoupled 30-60fps Rendering
+        self._event_queue = collections.deque(maxlen=100000)
+        self._log_queue = collections.deque(maxlen=10000)
+        self._last_rendered_summary_txt = ""
+        self._last_rendered_speed_txt = ""
+        self._last_rendered_progress_val = -1.0
+        self._last_log_flush_time = time.time()
 
         # Build Interface
         self._build_header()
@@ -56,7 +68,8 @@ class MainWindow(ctk.CTk):
         # Handle window close
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Initialize Backend Engine
+        # Initialize Backend Engine & High-Speed Render Loop
+        self.after(33, self._ui_render_tick)
         self.after(200, self._init_engine)
 
     def _build_header(self):
@@ -246,10 +259,11 @@ class MainWindow(ctk.CTk):
 
         self.btn_pause = ctk.CTkButton(
             btn_row,
-            text=t("btn_pause"),
-            fg_color="#d97706",
-            hover_color="#b45309",
-            width=90,
+            text=t("btn_start"),
+            fg_color="#16a34a",
+            hover_color="#15803d",
+            font=ctk.CTkFont(weight="bold"),
+            width=100,
             command=self._toggle_pause
         )
         self.btn_pause.pack(side="left", padx=6)
@@ -284,6 +298,16 @@ class MainWindow(ctk.CTk):
             command=self._open_unbackup_dialog
         )
         self.btn_unbackup.pack(side="left", padx=6)
+
+        self.btn_retry_failed = ctk.CTkButton(
+            btn_row,
+            text=t("btn_retry_failed"),
+            fg_color="#854d0e",
+            hover_color="#a16207",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._retry_failed_files
+        )
+        self.btn_retry_failed.pack(side="left", padx=6)
 
         # Right: Quick Thread Selector
         thread_box = ctk.CTkFrame(btn_row, fg_color="transparent")
@@ -385,6 +409,16 @@ class MainWindow(ctk.CTk):
             command=self._scan_all_folders_now
         )
         self.btn_scan_all.pack(side="left", padx=8)
+
+        self.btn_reconcile_albums = ctk.CTkButton(
+            btn_box,
+            text=t("btn_sync_albums_server"),
+            fg_color="#d97706",
+            hover_color="#b45309",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._on_sync_all_albums_with_server
+        )
+        self.btn_reconcile_albums.pack(side="left", padx=8)
 
         self.switch_auto_album = ctk.CTkSwitch(
             btn_box,
@@ -583,7 +617,11 @@ class MainWindow(ctk.CTk):
         # Actions
         self.btn_manual_files.configure(text=t("btn_select_files"))
         self.btn_manual_folder.configure(text=t("btn_upload_folder"))
-        self.btn_pause.configure(text=t("btn_resume") if self._is_paused else t("btn_pause"))
+        if self._is_paused:
+            btn_txt = t("btn_start") if (not self.uploader or self.uploader.queue.empty()) else t("btn_resume")
+            self.btn_pause.configure(text=btn_txt, fg_color="#16a34a", hover_color="#15803d")
+        else:
+            self.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706", hover_color="#b45309")
         self.btn_cancel.configure(text=t("btn_cancel"))
         self.btn_reset_action.configure(text=t("btn_reset_stats"))
         self.btn_unbackup.configure(text=t("btn_unbackup_cloud"))
@@ -601,6 +639,8 @@ class MainWindow(ctk.CTk):
         self.lbl_folders_guide.configure(text=t("folders_guide"))
         self.btn_add_folder.configure(text=t("btn_add_folder"))
         self.btn_scan_all.configure(text=t("btn_scan_all"))
+        if hasattr(self, "btn_reconcile_albums"):
+            self.btn_reconcile_albums.configure(text=t("btn_sync_albums_server"))
         self.switch_auto_album.configure(text=t("switch_auto_album"))
         self._refresh_folder_list()
 
@@ -668,80 +708,192 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
 
-        def _write():
-            try:
-                line = f"[{now_str}] {prefix} {message}\n"
-                self.log_textbox.insert("end", line)
-                # Keep max 1000 lines in textbox buffer to prevent GUI memory lag
-                try:
-                    num_lines = int(self.log_textbox.index("end-1c").split(".")[0])
-                    if num_lines > 1000:
-                        self.log_textbox.delete("1.0", f"{num_lines - 800}.0")
-                except Exception:
-                    pass
-                self.log_textbox.see("end")
-            except Exception:
-                pass
-        self.after(0, _write)
+        # Push to queue for batched GUI text insertion (prevents GUI freezing)
+        line = f"[{now_str}] {prefix} {message}\n"
+        self._log_queue.append(line)
 
     def _handle_uploader_event(self, data: dict):
-        def _process():
-            evt_type = data.get("type")
-            path_str = data.get("path", "")
-            file_path = Path(path_str) if path_str else None
-            worker_id = data.get("worker_id", 1)
-            percent = data.get("percent", 0.0)
-            speed = data.get("speed", "")
-            active_count = data.get("active_count", 0)
-            rem_queue = data.get("remaining_queue", 0)
+        # Push to event queue without creating individual Tkinter callbacks
+        self._event_queue.append(data)
 
-            # Update tray counters
-            self.upload_tray.update_counts(active_count, rem_queue)
+    def _ui_render_tick(self):
+        """High-performance 30-60 FPS UI tick loop.
+        Drains event queue in batch, merges worker states, and completely eliminates UI lag."""
+        try:
+            # 1. Process pending uploader events in batch (up to 3000 per frame)
+            events_to_process = []
+            while self._event_queue and len(events_to_process) < 3000:
+                events_to_process.append(self._event_queue.popleft())
 
-            if evt_type == "file_started" and file_path:
-                prep_txt = "Preparing..." if get_language() == "en" else "Đang chuẩn bị..."
-                self.upload_tray.add_or_update_file(file_path, worker_id, 0.0, prep_txt)
-                if get_language() == "en":
-                    self.lbl_current_file.configure(text=f"Uploading {active_count} files in parallel • {rem_queue} remaining in queue")
-                else:
-                    self.lbl_current_file.configure(text=f"Đang tải song song {active_count} file • Còn lại {rem_queue} trong hàng đợi")
-            elif evt_type == "file_progress" and file_path:
-                now = time.time()
-                last_t = self._last_progress_time.get(worker_id, 0)
-                # Throttle rapid progress events to max 20Hz per worker (smooth 50ms)
-                if percent < 100.0 and (now - last_t < 0.05):
-                    return
-                self._last_progress_time[worker_id] = now
+            if events_to_process:
+                latest_active_count = None
+                latest_rem_queue = None
+                worker_updates = {}
+                worker_starts = {}
+                worker_completions = {}
+                worker_errors = {}
+                queue_cleared = False
 
-                self.upload_tray.add_or_update_file(file_path, worker_id, percent, speed)
-                if speed:
-                    speed_lbl = f"Speed: {speed}" if get_language() == "en" else f"Tốc độ: {speed}"
-                    self.lbl_speed.configure(text=speed_lbl)
-                self.progress_bar.set(percent / 100.0)
-            elif evt_type == "file_completed" and file_path:
-                was_skipped = data.get("was_skipped", False)
-                self.upload_tray.mark_completed(file_path, was_skipped=was_skipped)
-                self._refresh_stats()
-            elif evt_type == "file_skipped" and file_path:
-                self.upload_tray.mark_completed(file_path, was_skipped=True)
-            elif evt_type == "file_skipped_fast":
-                self._refresh_stats()
-                if rem_queue > 0:
-                    if get_language() == "en":
-                        self.lbl_current_file.configure(text=f"⚡ Fast verified on Cloud • {rem_queue} remaining in queue")
+                for data in events_to_process:
+                    evt_type = data.get("type")
+                    path_str = data.get("path", "")
+                    file_path = Path(path_str) if path_str else None
+                    worker_id = data.get("worker_id", 1)
+                    percent = data.get("percent", 0.0)
+                    speed = data.get("speed", "")
+                    if "active_count" in data:
+                        latest_active_count = data["active_count"]
+                    if "remaining_queue" in data:
+                        latest_rem_queue = data["remaining_queue"]
+
+                    if evt_type == "file_started" and file_path:
+                        worker_starts[worker_id] = file_path
+                    elif evt_type == "file_progress" and file_path:
+                        worker_updates[worker_id] = (file_path, percent, speed)
+                    elif evt_type == "file_completed" and file_path:
+                        was_skipped = data.get("was_skipped", False)
+                        worker_completions[worker_id] = (file_path, was_skipped)
+                    elif evt_type == "file_skipped" and file_path:
+                        worker_completions[worker_id] = (file_path, True)
+                    elif evt_type == "file_skipped_fast":
+                        self._skipped_fast_count += 1
+                    elif evt_type == "file_error" and file_path:
+                        worker_errors[worker_id] = (file_path, data.get("error", "Error"))
+                    elif evt_type in ("queue_empty", "queue_cancelled"):
+                        queue_cleared = True
+
+                # Apply tray counter
+                if latest_active_count is not None and latest_rem_queue is not None:
+                    self.upload_tray.update_counts(latest_active_count, latest_rem_queue)
+
+                # Apply worker slot transitions
+                for wid, fp in worker_starts.items():
+                    prep_txt = "Preparing..." if get_language() == "en" else "Đang chuẩn bị..."
+                    self.upload_tray.add_or_update_file(fp, wid, 0.0, prep_txt)
+
+                for wid, (fp, pct, spd) in worker_updates.items():
+                    self.upload_tray.add_or_update_file(fp, wid, pct, spd)
+                    if spd:
+                        spd_lbl = f"Speed: {spd}" if get_language() == "en" else f"Tốc độ: {spd}"
+                        if self._last_rendered_speed_txt != spd_lbl:
+                            self.lbl_speed.configure(text=spd_lbl)
+                            self._last_rendered_speed_txt = spd_lbl
+                    p_val = pct / 100.0
+                    if abs(p_val - self._last_rendered_progress_val) >= 0.01:
+                        self.progress_bar.set(p_val)
+                        self._last_rendered_progress_val = p_val
+
+                for wid, (fp, was_skipped) in worker_completions.items():
+                    self.upload_tray.mark_completed(fp, was_skipped=was_skipped)
+
+                for wid, (fp, err) in worker_errors.items():
+                    self.upload_tray.mark_error(fp, err)
+
+                # Update macro status summary text
+                if queue_cleared:
+                    empty_msg = "Ready. All photos safely backed up to Google Photos!" if get_language() == "en" else "Sẵn sàng. Tất cả ảnh đã được sao lưu an toàn lên Cloud!"
+                    if self._last_rendered_summary_txt != empty_msg:
+                        self.lbl_current_file.configure(text=empty_msg)
+                        self._last_rendered_summary_txt = empty_msg
+                    if self._last_rendered_speed_txt != "":
+                        self.lbl_speed.configure(text="")
+                        self._last_rendered_speed_txt = ""
+                    self.progress_bar.set(0)
+                    self._last_rendered_progress_val = 0.0
+                    self._skipped_fast_count = 0
+                    self._refresh_stats()
+                elif latest_rem_queue is not None and latest_active_count is not None:
+                    if self._skipped_fast_count > 0 and latest_active_count == 0:
+                        if get_language() == "en":
+                            summary_txt = f"⚡ Fast verified {self._skipped_fast_count:,} files on Cloud • {latest_rem_queue:,} remaining"
+                        else:
+                            summary_txt = f"⚡ Đã xác nhận {self._skipped_fast_count:,} file trên Cloud • Còn {latest_rem_queue:,} trong hàng đợi"
+                    elif latest_rem_queue > 0 or latest_active_count > 0:
+                        if get_language() == "en":
+                            summary_txt = f"Uploading {latest_active_count} files in parallel • {latest_rem_queue:,} remaining in queue"
+                        else:
+                            summary_txt = f"Đang tải song song {latest_active_count} file • Còn lại {latest_rem_queue:,} trong hàng đợi"
                     else:
-                        self.lbl_current_file.configure(text=f"⚡ Đã có sẵn trên Cloud • Còn lại {rem_queue} trong hàng đợi")
-            elif evt_type == "file_error" and file_path:
-                err_lbl = "Error" if get_language() == "en" else "Lỗi"
-                self.upload_tray.mark_error(file_path, data.get("error", err_lbl))
-            elif evt_type in ("queue_empty", "queue_cancelled"):
-                empty_msg = "Ready. All photos safely backed up to Google Photos!" if get_language() == "en" else "Sẵn sàng. Tất cả ảnh đã được sao lưu an toàn lên Cloud!"
-                self.lbl_current_file.configure(text=empty_msg)
-                self.lbl_speed.configure(text="")
-                self.progress_bar.set(0)
-                self._refresh_stats()
+                        summary_txt = ""
 
-        self.after(0, _process)
+                    if summary_txt and self._last_rendered_summary_txt != summary_txt:
+                        self.lbl_current_file.configure(text=summary_txt)
+                        self._last_rendered_summary_txt = summary_txt
+
+                # Periodic stats refresh throttling
+                now = time.time()
+                if (worker_completions or self._skipped_fast_count > 0) and now - self._last_stats_refresh > 2.0:
+                    self._last_stats_refresh = now
+                    self._refresh_stats()
+
+            # 2. Batched Log Flushing to CTkTextbox
+            now = time.time()
+            if self._log_queue and (now - self._last_log_flush_time >= 0.15 or len(self._log_queue) > 50):
+                self._last_log_flush_time = now
+                log_chunk = []
+                while self._log_queue and len(log_chunk) < 80:
+                    log_chunk.append(self._log_queue.popleft())
+                if log_chunk:
+                    try:
+                        self.log_textbox.insert("end", "".join(log_chunk))
+                        try:
+                            num_lines = int(self.log_textbox.index("end-1c").split(".")[0])
+                            if num_lines > 1200:
+                                self.log_textbox.delete("1.0", f"{num_lines - 1000}.0")
+                        except Exception:
+                            pass
+                        self.log_textbox.see("end")
+                    except Exception:
+                        pass
+
+        except Exception:
+            pass
+        finally:
+            # Reschedule 30-60 FPS UI tick (~33ms)
+            self.after(33, self._ui_render_tick)
+
+    def _retry_failed_files(self):
+        if not self.uploader:
+            messagebox.showwarning(t("alert_warning"), "Engine chưa sẵn sàng hoặc chưa kết nối tài khoản.")
+            return
+
+        self.btn_retry_failed.configure(state="disabled", text=t("btn_retry_failed_scanning"))
+        self.append_log("Đang quét các file tải lỗi từ failed_skipped_files.log...", "INFO")
+
+        def _scan_and_queue():
+            try:
+                from core.uploader import get_failed_files_from_log
+                active_acc = self.config_mgr.get_active_account()
+                email = active_acc.get("email", "") if active_acc else ""
+                failed_files = get_failed_files_from_log("failed_skipped_files.log", db=self.db, account_email=email)
+
+                def _on_done():
+                    self.btn_retry_failed.configure(state="normal", text=t("btn_retry_failed"))
+                    if not failed_files:
+                        self.append_log("Không tìm thấy file nào cần tải lại (tất cả đã thành công hoặc không tồn tại trên ổ đĩa).", "SUCCESS")
+                        messagebox.showinfo(t("alert_info"), "Không có file lỗi nào cần tải lại.")
+                        return
+
+                    added = self.uploader.add_to_queue(failed_files)
+                    self.uploader.start_background_worker()
+                    self.append_log(f"Đã đưa {added:,} file bị lỗi vào hàng đợi tải lên!", "SUCCESS")
+                    messagebox.showinfo(t("alert_info"), f"Đã đưa {added:,} file bị lỗi vào hàng đợi tải lên!")
+
+                self.after(0, _on_done)
+            except Exception as e:
+                def _on_err():
+                    self.btn_retry_failed.configure(state="normal", text=t("btn_retry_failed"))
+                    self.append_log(f"Lỗi khi quét file tải lỗi: {e}", "ERROR")
+                    messagebox.showerror(t("alert_error"), f"Lỗi quét file lỗi: {e}")
+                self.after(0, _on_err)
+
+        threading.Thread(target=_scan_and_queue, daemon=True).start()
+
+    def _deferred_stats_refresh(self):
+        """Deferred stats refresh to batch multiple rapid updates."""
+        self._pending_stats_refresh = False
+        self._last_stats_refresh = time.time()
+        self._refresh_stats()
 
     def _refresh_stats(self):
         active_acc = self.config_mgr.get_active_account()
@@ -785,47 +937,65 @@ class MainWindow(ctk.CTk):
         self.account_label.configure(text=f"👤 {email}")
         self.btn_account.configure(text=t("btn_switch_account"))
 
-        try:
-            # Initialize Uploader with multi-threading
-            quality = self.config_mgr.config.get("quality", "original")
-            threads = int(self.config_mgr.config.get("threads", 4))
-            auto_album = self.config_mgr.config.get("auto_album", False)
-            if auto_album:
-                self.switch_auto_album.select()
-            else:
-                self.switch_auto_album.deselect()
+        # Read config values on main thread (fast)
+        quality = self.config_mgr.config.get("quality", "original")
+        threads = int(self.config_mgr.config.get("threads", 4))
+        auto_album = self.config_mgr.config.get("auto_album", False)
+        sync_folders = self.config_mgr.config.get("sync_folders", [])
+        auto_sync = self.config_mgr.config.get("auto_sync", True)
 
-            self.uploader = PhotoUploader(
-                auth_data=auth_data,
-                db=self.db,
-                quality=quality,
-                threads=threads,
-                auto_album=auto_album,
-                log_callback=self.append_log,
-                event_callback=self._handle_uploader_event
-            )
-            self.uploader.start_background_worker()
-            self.upload_tray.set_thread_count(threads)
+        if auto_album:
+            self.switch_auto_album.select()
+        else:
+            self.switch_auto_album.deselect()
 
-            # Initialize Watcher
-            sync_folders = self.config_mgr.config.get("sync_folders", [])
-            self.watcher = FolderWatcher(
-                uploader=self.uploader,
-                folders=sync_folders,
-                log_func=self.append_log
-            )
+        # Heavy initialization runs in background thread to keep UI responsive
+        def _bg_init():
+            try:
+                uploader = PhotoUploader(
+                    auth_data=auth_data,
+                    db=self.db,
+                    quality=quality,
+                    threads=threads,
+                    auto_album=auto_album,
+                    sync_roots=sync_folders,
+                    log_callback=self.append_log,
+                    event_callback=self._handle_uploader_event
+                )
 
-            if self.config_mgr.config.get("auto_sync", True):
-                self.watcher.start()
-                self.lbl_stat_status.configure(text=t("status_monitoring"), text_color="#4ade80")
+                watcher = FolderWatcher(
+                    uploader=uploader,
+                    folders=sync_folders,
+                    log_func=self.append_log
+                )
 
-            self._refresh_folder_list()
-            self._refresh_stats()
-            self.append_log(f"System ready! Multi-threaded engine ({threads} threads) activated.", "SUCCESS")
+                # Schedule UI updates and finalization back on main thread
+                def _finish_on_ui():
+                    self.uploader = uploader
+                    self.watcher = watcher
+                    self.uploader.start_background_worker()
+                    self.upload_tray.set_thread_count(threads)
 
-        except Exception as e:
-            self.append_log(f"Engine initialization error: {e}", "ERROR")
-            messagebox.showerror(t("alert_error"), f"Could not connect account:\n{e}")
+                    # Start in paused standby mode waiting for user to click Start
+                    self.uploader.pause()
+                    self._is_paused = True
+                    self.btn_pause.configure(text=t("btn_start"), fg_color="#16a34a", hover_color="#15803d")
+                    self.lbl_stat_status.configure(text=t("status_ready"), text_color="#38bdf8")
+
+                    if auto_sync:
+                        self.watcher.start()
+
+                    self._refresh_folder_list()
+                    self._refresh_stats()
+                    self.append_log(f"System ready! Multi-threaded engine ({threads} threads) activated.", "SUCCESS")
+
+                self.after(0, _finish_on_ui)
+
+            except Exception as e:
+                self.after(0, lambda: self.append_log(f"Engine initialization error: {e}", "ERROR"))
+                self.after(0, lambda: messagebox.showerror(t("alert_error"), f"Could not connect account:\n{e}"))
+
+        threading.Thread(target=_bg_init, daemon=True).start()
 
     def _on_change_quick_threads(self, choice: str):
         t_str = choice.split(" ")[0]
@@ -999,9 +1169,20 @@ class MainWindow(ctk.CTk):
             btn_del.pack(side="right", padx=8, pady=6)
 
     def _add_sync_folder(self):
+        # Force focus and use initialdir to prevent Windows folder dialog from failing
+        self.focus_force()
+        self.update_idletasks()
+        initial_dir = os.path.expanduser("~")
+        existing_folders = self.config_mgr.config.get("sync_folders", [])
+        if existing_folders:
+            last_folder = Path(existing_folders[-1])
+            if last_folder.parent.exists():
+                initial_dir = str(last_folder.parent)
         folder = filedialog.askdirectory(
             parent=self,
-            title=t("dialog_select_folder_title")
+            title=t("dialog_select_folder_title"),
+            initialdir=initial_dir,
+            mustexist=True
         )
         if not folder:
             return
@@ -1013,6 +1194,8 @@ class MainWindow(ctk.CTk):
             self._refresh_folder_list()
             if self.watcher:
                 self.watcher.update_folders_async(folders)
+            if self.uploader:
+                self.uploader.update_settings(sync_roots=folders)
             self.append_log(f"Added new monitored folder: {folder}", "SUCCESS")
 
             # Ask user if they want to scan and backup existing photos in this new folder
@@ -1033,6 +1216,8 @@ class MainWindow(ctk.CTk):
             self._refresh_folder_list()
             if self.watcher:
                 self.watcher.update_folders_async(folders)
+            if self.uploader:
+                self.uploader.update_settings(sync_roots=folders)
             self.append_log(f"Removed monitored folder: {folder}", "INFO")
 
     def _scan_single_folder_in_background(self, folder_path: Path):
@@ -1055,7 +1240,11 @@ class MainWindow(ctk.CTk):
                 return
 
             added = self.uploader.add_to_queue(found)
+            self.uploader.resume()
+            self._is_paused = False
             self.uploader.start_background_worker()
+            self.after(0, lambda: self.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706", hover_color="#b45309"))
+            self.after(0, lambda: self.lbl_stat_status.configure(text=t("status_monitoring"), text_color="#4ade80"))
             self.after(0, lambda: self.append_log(
                 f"Added {added} files from '{folder_path.name}' to multi-threaded queue ({self.uploader.threads} threads).",
                 "SUCCESS"
@@ -1098,13 +1287,24 @@ class MainWindow(ctk.CTk):
                 return
 
             added = self.uploader.add_to_queue(all_files)
+            self.uploader.resume()
+            self._is_paused = False
             self.uploader.start_background_worker()
+            self.after(0, lambda: self.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706", hover_color="#b45309"))
+            self.after(0, lambda: self.lbl_stat_status.configure(text=t("status_monitoring"), text_color="#4ade80"))
             self.after(0, lambda: self.append_log(
                 f"Scan complete. Added {added} files to multi-threaded upload queue.",
                 "SUCCESS"
             ))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _on_sync_all_albums_with_server(self):
+        if not self.uploader:
+            messagebox.showwarning(t("alert_warning"), t("alert_login_first"), parent=self)
+            return
+        if hasattr(self, "albums_view") and self.albums_view:
+            self.albums_view._on_sync_missing_photos_to_albums()
 
     def _manual_upload_files(self):
         if not self.uploader:
@@ -1122,7 +1322,11 @@ class MainWindow(ctk.CTk):
             paths = [Path(f) for f in files]
             def task():
                 added = self.uploader.add_to_queue(paths)
+                self.uploader.resume()
+                self._is_paused = False
                 self.uploader.start_background_worker()
+                self.after(0, lambda: self.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706", hover_color="#b45309"))
+                self.after(0, lambda: self.lbl_stat_status.configure(text=t("status_monitoring"), text_color="#4ade80"))
                 self.after(0, lambda: self.append_log(
                     f"Added {added} files to upload queue ({self.uploader.threads} threads).",
                     "INFO"
@@ -1133,7 +1337,20 @@ class MainWindow(ctk.CTk):
         if not self.uploader:
             messagebox.showwarning(t("alert_warning"), t("alert_login_first"), parent=self)
             return
-        folder = filedialog.askdirectory(parent=self, title=t("dialog_select_folder_title"))
+        self.focus_force()
+        self.update_idletasks()
+        initial_dir = os.path.expanduser("~")
+        existing_folders = self.config_mgr.config.get("sync_folders", [])
+        if existing_folders:
+            last_folder = Path(existing_folders[-1])
+            if last_folder.parent.exists():
+                initial_dir = str(last_folder.parent)
+        folder = filedialog.askdirectory(
+            parent=self,
+            title=t("dialog_select_folder_title"),
+            initialdir=initial_dir,
+            mustexist=True
+        )
         if folder:
             self._scan_single_folder_in_background(Path(folder))
 
@@ -1142,16 +1359,29 @@ class MainWindow(ctk.CTk):
             return
         if self._is_paused:
             self.uploader.resume()
-            self.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706")
+            self.btn_pause.configure(text=t("btn_pause"), fg_color="#d97706", hover_color="#b45309")
             self._is_paused = False
+            self.lbl_stat_status.configure(text=t("status_monitoring"), text_color="#4ade80")
+            # If queue is empty, trigger a scan of monitored folders to start uploading
+            if self.uploader._queue.empty():
+                folders = self.config_mgr.config.get("sync_folders", [])
+                if folders:
+                    self.append_log("▶ Bắt đầu quét và sao lưu các thư mục đã chọn...", "INFO")
+                    self._scan_all_folders_now()
         else:
             self.uploader.pause()
-            self.btn_pause.configure(text=t("btn_resume"), fg_color="#16a34a")
+            btn_txt = t("btn_start") if self.uploader._queue.empty() else t("btn_resume")
+            self.btn_pause.configure(text=btn_txt, fg_color="#16a34a", hover_color="#15803d")
             self._is_paused = True
+            self.lbl_stat_status.configure(text=t("status_paused"), text_color="#f59e0b")
 
     def _cancel_queue(self):
         if self.uploader:
             self.uploader.cancel()
+            self.uploader.pause()
+            self._is_paused = True
+            self.btn_pause.configure(text=t("btn_start"), fg_color="#16a34a", hover_color="#15803d")
+            self.lbl_stat_status.configure(text=t("status_ready"), text_color="#38bdf8")
             self.upload_tray.clear_all()
             self.progress_bar.set(0)
             self.lbl_current_file.configure(text=t("queue_cancelled"))
@@ -1185,7 +1415,11 @@ class MainWindow(ctk.CTk):
         self._apply_language()
 
         if self.uploader:
-            self.uploader.update_settings(quality=q_val, threads=threads)
+            self.uploader.update_settings(
+                quality=q_val,
+                threads=threads,
+                sync_roots=self.config_mgr.config.get("sync_folders", [])
+            )
             self.uploader.start_background_worker()
         self.upload_tray.set_thread_count(threads)
 

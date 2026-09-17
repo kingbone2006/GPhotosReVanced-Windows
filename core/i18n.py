@@ -102,6 +102,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "📂 Upload Folder",
         "vi": "📂 Tải thư mục",
     },
+    "btn_start": {
+        "en": "▶️ Start",
+        "vi": "▶️ Bắt đầu",
+    },
     "btn_pause": {
         "en": "⏸️ Pause",
         "vi": "⏸️ Tạm dừng",
@@ -117,6 +121,26 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "btn_reset_stats": {
         "en": "🔄 Reset Stats",
         "vi": "🔄 Reset thống kê",
+    },
+    "btn_retry_failed": {
+        "en": "🔄 Retry Failed Files",
+        "vi": "🔄 Tải lại file lỗi",
+    },
+    "btn_retry_failed_scanning": {
+        "en": "⏳ Scanning failed files...",
+        "vi": "⏳ Đang quét file lỗi...",
+    },
+    "btn_sync_missing_albums": {
+        "en": "🔍 Reconcile & Fill Albums (Photos & Videos)",
+        "vi": "🔍 Đồng bộ Album Server (Ảnh & Video)",
+    },
+    "btn_sync_missing_albums_scanning": {
+        "en": "⏳ Reconciling server albums...",
+        "vi": "⏳ Đang kiểm tra Album trên Server...",
+    },
+    "btn_sync_albums_server": {
+        "en": "🔍 Reconcile Server Albums",
+        "vi": "🔍 Đồng bộ Album với Server",
     },
     "lbl_threads": {
         "en": "⚡ Upload Threads:",
@@ -553,6 +577,22 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "btn_download_selected_albums": {
         "en": "📥 Download Selected ({count})",
         "vi": "📥 Tải {count} album đã chọn",
+    },
+    "btn_clean_empty_albums": {
+        "en": "🧹 Clean Empty Albums",
+        "vi": "🧹 Dọn Album Trống",
+    },
+    "filter_all_albums": {
+        "en": "All Albums",
+        "vi": "Tất cả",
+    },
+    "filter_with_photos": {
+        "en": "With Photos",
+        "vi": "Có ảnh",
+    },
+    "filter_empty_albums": {
+        "en": "Empty (0)",
+        "vi": "Trống (0)",
     },
     "btn_refresh_albums": {
         "en": "🔄 Refresh",

@@ -22,12 +22,25 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Windows DPI Awareness
+# Windows DPI Awareness & High-Performance Multimedia Timer
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
 except Exception:
     try:
         ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+# Set 1ms timer resolution for buttery smooth 60fps Tkinter loops on Windows
+if sys.platform == "win32":
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+    try:
+        # Give GUI process ABOVE_NORMAL priority so heavy worker threads don't starve rendering
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x00008000)
     except Exception:
         pass
 

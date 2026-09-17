@@ -8,7 +8,7 @@ import hashlib
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Sequence, Tuple
 
 
 class UploadDatabase:
@@ -79,6 +79,13 @@ class UploadDatabase:
                         )
                     """)
 
+                pragma_alb = conn.execute("PRAGMA table_info(albums)").fetchall()
+                alb_cols = [col[1] for col in pragma_alb] if pragma_alb else []
+                if pragma_alb and "remote_count" not in alb_cols:
+                    conn.execute("ALTER TABLE albums ADD COLUMN remote_count INTEGER DEFAULT 0;")
+                if pragma_alb and "cover_media_key" not in alb_cols:
+                    conn.execute("ALTER TABLE albums ADD COLUMN cover_media_key TEXT DEFAULT '';")
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS album_items (
                         account_email TEXT NOT NULL DEFAULT '',
@@ -86,6 +93,15 @@ class UploadDatabase:
                         media_key TEXT NOT NULL,
                         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (account_email, album_name, media_key)
+                    )
+                """)
+
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS ignored_albums (
+                        account_email TEXT NOT NULL DEFAULT '',
+                        album_name TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (account_email, album_name)
                     )
                 """)
 
@@ -127,13 +143,27 @@ class UploadDatabase:
                     row = cur.fetchone()
                     return row["album_media_key"] if row else None
 
-    def save_album_key(self, album_name: str, album_media_key: str, account_email: str = "") -> None:
+    def save_album_key(
+        self,
+        album_name: str,
+        album_media_key: str,
+        account_email: str = "",
+        remote_count: int = 0,
+        cover_media_key: str = ""
+    ) -> None:
         """Store Google Photos album key for an album name and account."""
         with self._lock:
             with self._get_connection() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO albums (account_email, album_name, album_media_key) VALUES (?, ?, ?)",
-                    (account_email, album_name, album_media_key)
+                    """
+                    INSERT INTO albums (account_email, album_name, album_media_key, remote_count, cover_media_key)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(account_email, album_name) DO UPDATE SET
+                        album_media_key = excluded.album_media_key,
+                        remote_count = CASE WHEN excluded.remote_count > 0 THEN excluded.remote_count ELSE albums.remote_count END,
+                        cover_media_key = CASE WHEN excluded.cover_media_key != '' THEN excluded.cover_media_key ELSE albums.cover_media_key END
+                    """,
+                    (account_email, album_name, album_media_key, remote_count, cover_media_key)
                 )
                 conn.commit()
 
@@ -186,15 +216,72 @@ class UploadDatabase:
                 conn.commit()
 
     def delete_album(self, album_name: str, account_email: str = "") -> None:
-        """Completely remove an album record and its items from local database."""
+        """Completely remove an album record and its items from local database and ignore from sync."""
         with self._lock:
             with self._get_connection() as conn:
                 if account_email:
                     conn.execute("DELETE FROM albums WHERE album_name = ? AND (account_email = ? OR account_email = '' OR account_email IS NULL)", (album_name, account_email))
                     conn.execute("DELETE FROM album_items WHERE album_name = ? AND (account_email = ? OR account_email = '' OR account_email IS NULL)", (album_name, account_email))
+                    conn.execute("INSERT OR IGNORE INTO ignored_albums (account_email, album_name) VALUES (?, ?)", (account_email, album_name))
                 else:
                     conn.execute("DELETE FROM albums WHERE album_name = ?", (album_name,))
                     conn.execute("DELETE FROM album_items WHERE album_name = ?", (album_name,))
+                    conn.execute("INSERT OR IGNORE INTO ignored_albums (account_email, album_name) VALUES ('', ?)", (album_name,))
+                conn.commit()
+
+    def clean_empty_albums(self, account_email: str = "") -> List[str]:
+        """
+        Deletes all albums with 0 photos from local database and adds them to ignored_albums
+        so they are not re-imported by sync_cloud_albums.
+        Returns list of cleaned album names.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                # Find all empty albums: remote_count <= 0 and not in album_items
+                cur = conn.execute("""
+                    SELECT album_name FROM albums
+                    WHERE (account_email = ? OR account_email = '' OR account_email IS NULL)
+                    AND (remote_count IS NULL OR remote_count <= 0)
+                    AND album_name NOT IN (
+                        SELECT DISTINCT album_name FROM album_items
+                        WHERE (account_email = ? OR account_email = '' OR account_email IS NULL)
+                    )
+                """, (account_email, account_email))
+                rows = cur.fetchall()
+                if not rows:
+                    return []
+
+                cleaned_names = [r["album_name"] for r in rows]
+                conn.executemany(
+                    "INSERT OR IGNORE INTO ignored_albums (account_email, album_name) VALUES (?, ?)",
+                    [(account_email, name) for name in cleaned_names]
+                )
+                placeholders = ",".join(["?"] * len(cleaned_names))
+                conn.execute(
+                    f"DELETE FROM albums WHERE (account_email = ? OR account_email = '' OR account_email IS NULL) AND album_name IN ({placeholders})",
+                    [account_email] + cleaned_names
+                )
+                conn.commit()
+                return cleaned_names
+
+    def get_ignored_albums(self, account_email: str = "") -> set:
+        """Get set of ignored album names for this account."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    "SELECT album_name FROM ignored_albums WHERE account_email = ? OR account_email = '' OR account_email IS NULL",
+                    (account_email,)
+                )
+                return {r["album_name"] for r in cur.fetchall()}
+
+    def unignore_album(self, album_name: str, account_email: str = "") -> None:
+        """Remove album from ignored list when new photos are uploaded to it."""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "DELETE FROM ignored_albums WHERE album_name = ? AND (account_email = ? OR account_email = '' OR account_email IS NULL)",
+                    (album_name, account_email)
+                )
                 conn.commit()
 
     @staticmethod
@@ -475,33 +562,44 @@ class UploadDatabase:
                 conn.commit()
             self._fast_cache = None
 
-    def get_all_albums(self, account_email: str = "") -> List[Dict[str, Any]]:
+    def get_all_albums(self, account_email: str = "", sync_roots: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
         """
         Get all albums with their photo count and cover thumbnail info.
         Combines registered albums and folder-based albums from uploads.
+        Intelligently resolves subfolders/pagination to true parent album names.
         """
+        from pathlib import Path
+        from .uploader import determine_album_name, is_subfolder_artifact
+
         albums_dict = {}
         with self._get_connection() as conn:
             # 1. Registered albums in albums table
-            q_alb = "SELECT album_name, album_media_key, created_at FROM albums WHERE (account_email = ? OR account_email = '' OR account_email IS NULL)"
+            q_alb = "SELECT album_name, album_media_key, created_at, remote_count, cover_media_key FROM albums WHERE (account_email = ? OR account_email = '' OR account_email IS NULL)"
             for row in conn.execute(q_alb, (account_email,)).fetchall():
                 name = row["album_name"]
+                if is_subfolder_artifact(name):
+                    continue
+                rem_cnt = row["remote_count"] if "remote_count" in row.keys() and row["remote_count"] else 0
+                cov_key = row["cover_media_key"] if "cover_media_key" in row.keys() and row["cover_media_key"] else ""
                 albums_dict[name] = {
                     "album_name": name,
                     "album_media_key": row["album_media_key"],
                     "created_at": row["created_at"],
-                    "photo_count": 0,
+                    "photo_count": rem_cnt,
                     "cover_path": "",
-                    "cover_media_key": "",
+                    "cover_media_key": cov_key,
                 }
 
             # 2. Add counts from album_items
             q_items = "SELECT album_name, COUNT(DISTINCT media_key) as cnt, MIN(media_key) as cover_key FROM album_items WHERE (account_email = ? OR account_email = '' OR account_email IS NULL) GROUP BY album_name"
             for row in conn.execute(q_items, (account_email,)).fetchall():
                 name = row["album_name"]
+                if is_subfolder_artifact(name):
+                    continue
                 if name in albums_dict:
-                    albums_dict[name]["photo_count"] = row["cnt"]
-                    albums_dict[name]["cover_media_key"] = row["cover_key"]
+                    albums_dict[name]["photo_count"] = max(albums_dict[name]["photo_count"], row["cnt"])
+                    if not albums_dict[name]["cover_media_key"] and row["cover_key"]:
+                        albums_dict[name]["cover_media_key"] = row["cover_key"]
                 else:
                     albums_dict[name] = {
                         "album_name": name,
@@ -513,37 +611,68 @@ class UploadDatabase:
                     }
 
             # 3. Discover folder-based albums from uploads table
-            q_uploads = "SELECT local_path, filename, media_key FROM uploads WHERE status = 'success' AND (account_email = ? OR account_email = '' OR account_email IS NULL)"
+            # Cached per directory to process tens of thousands of files in milliseconds
+            q_uploads = """SELECT local_path, media_key FROM uploads 
+                          WHERE status = 'success' AND (account_email = ? OR account_email = '' OR account_email IS NULL)"""
+            folder_counts = {}  # album_name -> count
+            folder_first = {}   # album_name -> (local_path, media_key)
+            dir_cache = {}      # dir_path -> album_name
+
             for row in conn.execute(q_uploads, (account_email,)).fetchall():
                 p_str = row["local_path"]
                 if not p_str:
                     continue
-                p = Path(p_str)
-                parent_name = p.parent.name
-                if not parent_name or parent_name in (".", "/", "\\"):
+                sep_idx = p_str.rfind(os.sep)
+                if sep_idx <= 0:
+                    sep_idx = p_str.rfind('/')
+                if sep_idx <= 0:
                     continue
+                dir_path = p_str[:sep_idx]
+                if dir_path in dir_cache:
+                    parent_name = dir_cache[dir_path]
+                else:
+                    try:
+                        parent_name = determine_album_name(Path(p_str), sync_roots)
+                    except Exception:
+                        parent_name = ""
+                    dir_cache[dir_path] = parent_name
+
+                if not parent_name or is_subfolder_artifact(parent_name):
+                    continue
+
+                if parent_name not in folder_counts:
+                    folder_counts[parent_name] = 0
+                    folder_first[parent_name] = (p_str, row["media_key"] or "")
+                folder_counts[parent_name] += 1
+
+            for parent_name, count in folder_counts.items():
+                first_path, first_media_key = folder_first[parent_name]
                 if parent_name not in albums_dict:
                     albums_dict[parent_name] = {
                         "album_name": parent_name,
                         "album_media_key": "",
                         "created_at": "",
-                        "photo_count": 1,
-                        "cover_path": p_str if p.exists() else "",
-                        "cover_media_key": row["media_key"] or "",
+                        "photo_count": count,
+                        "cover_path": first_path if os.path.exists(first_path) else "",
+                        "cover_media_key": first_media_key,
                     }
                 else:
                     if albums_dict[parent_name]["photo_count"] == 0:
-                        albums_dict[parent_name]["photo_count"] += 1
-                        if not albums_dict[parent_name]["cover_path"] and p.exists():
-                            albums_dict[parent_name]["cover_path"] = p_str
+                        albums_dict[parent_name]["photo_count"] = count
+                        if not albums_dict[parent_name]["cover_path"] and os.path.exists(first_path):
+                            albums_dict[parent_name]["cover_path"] = first_path
                         if not albums_dict[parent_name]["cover_media_key"]:
-                            albums_dict[parent_name]["cover_media_key"] = row["media_key"] or ""
+                            albums_dict[parent_name]["cover_media_key"] = first_media_key
                     elif not albums_dict[parent_name].get("album_media_key"):
-                        albums_dict[parent_name]["photo_count"] += 1
+                        albums_dict[parent_name]["photo_count"] = count
 
-        return sorted(list(albums_dict.values()), key=lambda x: x["album_name"].lower())
+        valid_albums = [
+            a for a in albums_dict.values()
+            if a.get("album_name") and not is_subfolder_artifact(a["album_name"])
+        ]
+        return sorted(valid_albums, key=lambda x: x["album_name"].lower())
 
-    def get_album_photos(self, album_name: str, account_email: str = "") -> List[Dict[str, Any]]:
+    def get_album_photos(self, album_name: str, account_email: str = "", sync_roots: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
         """
         Get all photos belonging to an album.
         Checks album_items first, with fallback to path-based matching in uploads.
@@ -555,9 +684,11 @@ class UploadDatabase:
             SELECT u.filename, u.local_path, u.media_key, u.file_size, u.uploaded_at
             FROM album_items ai
             JOIN uploads u ON ai.media_key = u.media_key
-            WHERE ai.album_name = ? AND (ai.account_email = ? OR ai.account_email = '' OR ai.account_email IS NULL)
+            WHERE ai.album_name = ? AND (? = '' OR ai.account_email = ? OR ai.account_email = '' OR ai.account_email IS NULL)
             """
-            for row in conn.execute(q1, (album_name, account_email)).fetchall():
+            seen_keys = set()
+            seen_paths = set()
+            for row in conn.execute(q1, (album_name, account_email, account_email)).fetchall():
                 photos.append({
                     "filename": row["filename"],
                     "local_path": row["local_path"],
@@ -565,18 +696,39 @@ class UploadDatabase:
                     "file_size": row["file_size"],
                     "uploaded_at": row["uploaded_at"]
                 })
+                if row["media_key"]:
+                    seen_keys.add(row["media_key"])
+                if row["local_path"]:
+                    seen_paths.add(row["local_path"])
 
-            # 2. If empty, fallback to parent directory matching in uploads
-            if not photos:
-                q2 = """
-                SELECT filename, local_path, media_key, file_size, uploaded_at
-                FROM uploads
-                WHERE status = 'success' 
-                  AND (account_email = ? OR account_email = '' OR account_email IS NULL)
-                """
-                for row in conn.execute(q2, (account_email,)).fetchall():
-                    p_str = row["local_path"]
-                    if p_str and Path(p_str).parent.name == album_name:
+            # 2. Also check uploads table to include any uploaded photos/videos of this album
+            from pathlib import Path
+            from .uploader import determine_album_name
+            q2 = """
+            SELECT filename, local_path, media_key, file_size, uploaded_at
+            FROM uploads
+            WHERE status = 'success' 
+              AND (? = '' OR account_email = ? OR account_email = '' OR account_email IS NULL)
+            """
+            dir_cache = {}
+            for row in conn.execute(q2, (account_email, account_email)).fetchall():
+                p_str = row["local_path"]
+                m_key = row["media_key"]
+                if p_str and p_str not in seen_paths and (not m_key or m_key not in seen_keys):
+                    sep_idx = p_str.rfind(os.sep)
+                    if sep_idx <= 0:
+                        sep_idx = p_str.rfind('/')
+                    dir_path = p_str[:sep_idx] if sep_idx > 0 else p_str
+                    if dir_path in dir_cache:
+                        resolved = dir_cache[dir_path]
+                    else:
+                        try:
+                            resolved = determine_album_name(Path(p_str), sync_roots)
+                        except Exception:
+                            resolved = ""
+                        dir_cache[dir_path] = resolved
+
+                    if resolved == album_name:
                         photos.append({
                             "filename": row["filename"],
                             "local_path": row["local_path"],
@@ -584,6 +736,7 @@ class UploadDatabase:
                             "file_size": row["file_size"],
                             "uploaded_at": row["uploaded_at"]
                         })
+                        seen_paths.add(p_str)
 
         return photos
 

@@ -12,6 +12,10 @@ from PIL import Image, ImageOps
 import customtkinter as ctk
 from core.i18n import t
 
+# Raise PIL decompression bomb pixel limit to handle very large panoramas and RAW photos
+# without warnings or crashes when generating small thumbnails.
+Image.MAX_IMAGE_PIXELS = 300_000_000  # Allow up to 300 megapixel images
+
 
 # Global thumbnail cache and background worker pool
 _THUMB_CACHE: Dict[str, ctk.CTkImage] = {}
@@ -124,6 +128,11 @@ class WorkerSlotCard(ctk.CTkFrame):
         )
         self.lbl_status.pack(fill="x", padx=8, pady=(0, 6))
 
+        # Dirty-checking cache to avoid redundant widget redraws
+        self._last_progress_val = -1.0
+        self._last_status_txt = ""
+        self._last_name_txt = ""
+
     def set_active_file(self, file_path: Path, percent: float = 0.0, speed: str = ""):
         # Cancel any pending reset timer
         if self._complete_timer:
@@ -138,7 +147,9 @@ class WorkerSlotCard(ctk.CTkFrame):
             disp_name = file_path.name
             if len(disp_name) > 16:
                 disp_name = disp_name[:11] + "..." + file_path.suffix
-            self.lbl_name.configure(text=disp_name, text_color="#f4f4f5")
+            if self._last_name_txt != disp_name:
+                self.lbl_name.configure(text=disp_name, text_color="#f4f4f5")
+                self._last_name_txt = disp_name
             self.configure(border_color="#3b82f6", fg_color="#18181b")
             self.lbl_badge.configure(
                 text=f"{t('card_thread')} {self.worker_id}",
@@ -147,19 +158,26 @@ class WorkerSlotCard(ctk.CTkFrame):
             )
             self.progress_bar.configure(progress_color="#3b82f6")
             self.progress_bar.set(percent / 100.0)
+            self._last_progress_val = percent / 100.0
             self.lbl_thumb.configure(image="", text="⏳")
 
             # Asynchronously load thumbnail in thread pool
             _THUMB_EXECUTOR.submit(self._async_load_thumb, file_path)
 
-        # Update progress and speed
-        self.progress_bar.set(percent / 100.0)
+        # Update progress and speed only when changed
+        target_val = percent / 100.0
+        if abs(target_val - self._last_progress_val) >= 0.01 or target_val >= 1.0 or target_val == 0.0:
+            self.progress_bar.set(target_val)
+            self._last_progress_val = target_val
+
         txt = f"{percent:.0f}%"
         if speed:
             txt += f" • {speed}"
         elif percent == 0:
             txt = t("card_waiting")
-        self.lbl_status.configure(text=txt, text_color="#38bdf8")
+        if self._last_status_txt != txt:
+            self.lbl_status.configure(text=txt, text_color="#38bdf8")
+            self._last_status_txt = txt
 
     def _async_load_thumb(self, file_path: Path):
         thumb = get_file_thumbnail(file_path, size=(96, 96))
@@ -321,4 +339,7 @@ class ActiveUploadTray(ctk.CTkFrame):
             card.set_standby()
 
     def update_counts(self, active_count: int, remaining_queue: int):
-        self.lbl_counter.configure(text=f"{active_count} đang tải • {remaining_queue} trong hàng đợi")
+        txt = f"{active_count} đang tải • {remaining_queue} trong hàng đợi"
+        if getattr(self, "_last_counter_txt", None) != txt:
+            self._last_counter_txt = txt
+            self.lbl_counter.configure(text=txt)

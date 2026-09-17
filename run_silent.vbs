@@ -1,19 +1,10 @@
-' Google Photos ReVanced - Silent Launcher (No Console Window)
 Set WshShell = CreateObject("WScript.Shell")
-Dim fso, scriptDir
 Set fso = CreateObject("Scripting.FileSystemObject")
-scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+strDir = fso.GetParentFolderName(WScript.ScriptFullName)
+WshShell.CurrentDirectory = strDir
 
-Dim pythonwExe, mainScript
-pythonwExe = scriptDir & "\venv\Scripts\pythonw.exe"
-mainScript = scriptDir & "\main.py"
-
-If Not fso.FileExists(pythonwExe) Then
-    ' Fallback to run.bat if venv is not ready
-    WshShell.Run """" & scriptDir & "\run.bat""", 1, True
+If fso.FileExists(strDir & "\venv\Scripts\pythonw.exe") Then
+    WshShell.Run Chr(34) & strDir & "\venv\Scripts\pythonw.exe" & Chr(34) & " main.py", 0, False
 Else
-    WshShell.CurrentDirectory = scriptDir
-    WshShell.Run """" & pythonwExe & """ """ & mainScript & """", 0, False
+    WshShell.Run "cmd /c run.bat", 1, False
 End If
-Set WshShell = Nothing
-Set fso = Nothing

@@ -32,17 +32,19 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 :: Check common default installation paths
-if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
-    set "SYSTEM_PYTHON=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-    goto :PYTHON_READY
-)
-if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
-    set "SYSTEM_PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-    goto :PYTHON_READY
-)
-if exist "%ProgramFiles%\Python311\python.exe" (
-    set "SYSTEM_PYTHON=%ProgramFiles%\Python311\python.exe"
-    goto :PYTHON_READY
+for %%V in (Python314 Python313 Python312 Python311 Python310) do (
+    if exist "%LOCALAPPDATA%\Programs\Python\%%V\python.exe" (
+        set "SYSTEM_PYTHON=%LOCALAPPDATA%\Programs\Python\%%V\python.exe"
+        goto :PYTHON_READY
+    )
+    if exist "%ProgramFiles%\Python\%%V\python.exe" (
+        set "SYSTEM_PYTHON=%ProgramFiles%\Python\%%V\python.exe"
+        goto :PYTHON_READY
+    )
+    if exist "%ProgramFiles%\%%V\python.exe" (
+        set "SYSTEM_PYTHON=%ProgramFiles%\%%V\python.exe"
+        goto :PYTHON_READY
+    )
 )
 
 :: 3. Python is missing: Automatically download and install Python 3.11

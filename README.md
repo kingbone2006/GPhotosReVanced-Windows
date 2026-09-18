@@ -1,6 +1,7 @@
 # 📸 Google Photos ReVanced (Windows Edition)
 
-> **Lifetime Free Unlimited Cloud Storage Backup for Windows 10/11 by Emulating Google Pixel XL.**
+> **Lifetime Free Unlimited Cloud Storage Backup for Windows 10/11 by Emulating Google Pixel XL.**  
+> Back up photos & videos at Original Quality without consuming your 15GB Google Drive quota.
 
 ---
 
@@ -12,20 +13,40 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10/11" />
   <img src="https://img.shields.io/badge/Storage-Pixel%20XL%20Unlimited-22c55e?style=for-the-badge&logo=googlephotos&logoColor=white" alt="Pixel XL Unlimited" />
-  <img src="https://img.shields.io/badge/Multi--Threading-Up%20to%208%20Threads-38bdf8?style=for-the-badge&logo=speedtest&logoColor=white" alt="Multi-Threaded" />
-  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Network-1Gbps%20Fiber%20Ready-f59e0b?style=for-the-badge&logo=speedtest&logoColor=white" alt="1Gbps Ready" />
+  <img src="https://img.shields.io/badge/Multi--Threading-Up%20to%2016%20Threads-38bdf8?style=for-the-badge&logo=speedtest&logoColor=white" alt="Multi-Threaded" />
+  <img src="https://img.shields.io/badge/Python-3.10%20--%203.14-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10 - 3.14" />
   <img src="https://img.shields.io/badge/License-MIT-purple?style=for-the-badge" alt="MIT License" />
 </p>
 
 ---
 
+## ⚡ 1-Step Quick Start (Zero Configuration)
+
+You only need **Git** and **Python** (or let the launcher auto-install Python for you).
+
+```cmd
+git clone https://github.com/kingbone2006/GPhotosReVanced-Windows.git
+cd GPhotosReVanced-Windows
+run.bat
+```
+
+> [!TIP]
+> **That's it!** Simply double-click **`run.bat`**:
+> 1. Detects Python automatically (or installs Python 3.11 quietly if missing).
+> 2. Sets up an isolated virtual environment (`venv`).
+> 3. Installs all required libraries from `requirements.txt`.
+> 4. Launches the application immediately. On subsequent launches, it opens in under 1 second!
+
+---
+
 ## 📑 Table of Contents
 - [🌟 Highlights & Features](#-highlights--features)
-- [⚡ 1-Click Automated Setup (Zero-Config)](#-1-click-automated-setup-zero-config)
+- [⚡ 1-Step Quick Start](#-1-step-quick-start-zero-configuration)
 - [🛠️ Manual Installation](#️-manual-installation)
 - [🚀 Quick Start Guide](#-quick-start-guide)
-- [⚙️ Configuration & Thread Optimization](#️-configuration--thread-optimization)
-- [🗂️ Auto-Album Feature](#️-auto-album-feature)
+- [⚙️ High-Performance Architecture & Threads](#️-high-performance-architecture--threads)
+- [🗂️ Smart Auto-Album Feature](#️-smart-auto-album-feature)
 - [🌐 Bilingual Interface](#-bilingual-interface)
 - [🔒 Privacy & Security](#-privacy--security)
 - [❓ Frequently Asked Questions (FAQ)](#-frequently-asked-questions-faq)
@@ -35,44 +56,21 @@
 
 ## 🌟 Highlights & Features
 
-- **📱 Pixel XL Hardware Spoofing**: Authenticates directly with Google Photos backend using Google Pixel XL device signatures (`marlin`), unlocking lifetime free unlimited backup at Original Quality without consuming your Google Drive quota.
-- **⚡ High-Speed Multi-Threaded Engine**: Upload multiple photos/videos concurrently (up to 8 threads). Automatically scales performance to maximize bandwidth utilization.
-- **🔄 Real-Time Auto-Sync Watcher**: Monitors your local folders continuously. When new photos or videos are detected, they are automatically queued and backed up immediately in the background.
-- **🗂️ Smart Auto-Album Creation**: Automatically groups photos into cloud albums based on their parent directory names, with full account isolation and deduplication.
-- **🔐 1-Click Browser Auto-Capture Authentication**: Automated Chrome DevTools Protocol (CDP) token extraction. Simply log in through the secure Google web window and the app captures your token automatically—no manual DevTools or F12 required.
-- **🎨 Windows 11 Fluent Dark UI**: Built with CustomTkinter, featuring an Android Google Photos-style upload card carousel with real-time progress bars, speed metrics, and completion fade animations.
-- **🌐 Dual-Language Support**: English by default, with instant 1-click toggle to Vietnamese in Settings without restarting.
-- **🔄 Local Stats Management**: Real-time counter of backed up media and saved storage quota, complete with a 1-click Reset Statistics button.
-
----
-
-## ⚡ 1-Click Automated Setup (Zero-Config)
-
-You can set up and run this application on **any clean Windows PC** with zero manual configuration.
-
-1. **Download or Clone the Repository**:
-   ```cmd
-   git clone https://github.com/kingbone2006/GPhotosReVanced-Windows.git
-   cd GPhotosReVanced-Windows
-   ```
-
-2. **Run `install.bat`**:
-   - Double-click `install.bat`.
-   - The installer automatically:
-     - Detects if Python 3.10+ is installed (and installs Python 3.11 automatically via `winget` or official installer if missing).
-     - Creates a dedicated virtual environment (`venv`).
-     - Upgrades `pip` and installs all dependencies from `requirements.txt`.
-     - Generates a **Desktop Shortcut** (`Google Photos ReVanced.lnk`).
-
-3. **Launch the Application**:
-   - Double-click `run.bat` (Console Debug mode) or `run_silent.vbs` (Silent background mode).
-   - *(Note: If you run `run.bat` directly without running `install.bat`, it will automatically trigger the installer for you!)*
+- **📱 Pixel XL Hardware Spoofing**: Authenticates directly with Google Photos backend using Google Pixel XL device signatures (`marlin`), unlocking lifetime free unlimited backup at **Original Quality for both Photos and Videos** without consuming your 15GB Google Drive quota.
+- **🚀 In-Memory RAM Cache Pipeline**: Pre-buffers files into RAM with throttled sequential disk reads, completely eliminating mechanical HDD head thrashing, reducing disk active time, and streaming uploads at wire speed (40 – 80+ MB/s).
+- **⚡ Multi-Core CPU Hash Offloading**: Offloads SHA-1 hash computations across all CPU cores via a dedicated process pool, bypassing the Python GIL and calculating hashes at ~2,500 MB/s.
+- **🌐 1Gbps Network & Socket Tuning**: Reuses persistent HTTP/TLS 1.3 Keep-Alive connections, configures `TCP_NODELAY`, 2MB socket buffers, and 1MB chunk transmission to saturate fiber bandwidth.
+- **🔄 Real-Time Auto-Sync Watcher**: Continuously monitors local folders. Whenever new photos or videos are added, they are automatically queued and backed up in the background.
+- **🗂️ Smart Auto-Album Creation**: Groups photos into cloud albums based on parent folder names, with deduplication and 404 auto-recreation.
+- **🔐 1-Click Browser Auto-Capture Authentication**: Chrome DevTools Protocol (CDP) token extraction. Simply log in through the secure Google web window and the app captures your token automatically—no manual DevTools or F12 required.
+- **🎨 Windows 11 Fluent Dark UI**: Built with CustomTkinter, featuring an Android Google Photos-style upload card carousel with real-time speed metrics and smooth completion animations.
+- **🌐 Dual-Language Support**: English by default, with an instant 1-click toggle to Vietnamese in Settings without restarting.
 
 ---
 
 ## 🛠️ Manual Installation
 
-If you prefer setting up manually:
+If you prefer setting up manually without `run.bat`:
 
 ```cmd
 # 1. Clone the repository
@@ -113,20 +111,22 @@ python main.py
 
 ---
 
-## ⚙️ Configuration & Thread Optimization
+## ⚙️ High-Performance Architecture & Threads
 
 | Thread Count | Recommended Use Case |
 | :--- | :--- |
-| **1 - 2 Threads** | Low-bandwidth connections or background synchronization while gaming. |
-| **4 Threads (Default)** | Optimal balance between speed and stability for standard home broadband. |
-| **6 Threads (Ultra Speed)** | High-speed fiber connections (100Mbps+); great for large video files. |
-| **8 Threads (Maximum)** | Gigabit internet connections; maximum parallel throughput. |
+| **2 Threads** | Mechanical SATA HDDs or low-bandwidth connections. |
+| **4 - 6 Threads (Recommended)** | Standard home broadband & fiber (100Mbps – 500Mbps); optimal balance preventing Google server rate limits. |
+| **8 - 12 Threads** | Gigabit fiber connections (1Gbps) with SSDs or large RAM caches. |
+| **16 Threads (Extreme)** | High-end multi-core CPUs with NVMe SSDs and high-capacity RAM pipelines. |
 
-You can switch thread count on-the-fly directly from the Dashboard toolbar or the Settings tab.
+> [!TIP]
+> **Why RAM Cache matters for HDD users**:
+> Reading multiple files simultaneously on a mechanical HDD causes head thrashing, dropping disk speed to 2 MB/s. Our pipeline throttles physical disk reads to 2 sequential streams into an in-memory RAM buffer, allowing uploads to blast out of RAM at full wire speed (40 – 80+ MB/s).
 
 ---
 
-## 🗂️ Auto-Album Feature
+## 🗂️ Smart Auto-Album Feature
 
 When **Auto-Album** is enabled:
 - Photos located in `D:\Photos\Japan Trip 2025\IMG_001.jpg` are automatically assigned to an album named `Japan Trip 2025` on Google Photos.
@@ -163,7 +163,7 @@ The application defaults to **English**. You can switch to **Tiếng Việt** at
 **A:** All standard media types:
 - **Images**: `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, `.bmp`, `.gif`, `.tiff`
 - **RAW Photos**: `.dng`, `.cr2`, `.nef`, `.arw`, `.rw2`, `.orf`
-- **Videos**: `.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`, `.3gp`, `.m4v`
+- **Videos**: `.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`, `.3gp`, `.m4v`, `.mts`
 
 #### Q: Can I run the application silently in the background on startup?
 **A:** Yes, launch using `run_silent.vbs` or place a shortcut to `run_silent.vbs` in your Windows Startup folder (`shell:startup`).
@@ -174,4 +174,4 @@ The application defaults to **English**. You can switch to **Tiếng Việt** at
 
 - This open-source project is developed for personal, non-commercial backup purposes and educational research.
 - Google Photos is a trademark of Google LLC. This project is not affiliated with or endorsed by Google LLC.
-- Licensed under the **MIT License**.
+- Licensed under the **[MIT License](LICENSE)**.

@@ -7,3 +7,4 @@ Pillow>=10.0.0
 requests>=2.32.0
 blackboxprotobuf
 websockets>=13.0
+rich>=13.0.0

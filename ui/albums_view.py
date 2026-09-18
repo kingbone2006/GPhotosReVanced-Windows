@@ -424,24 +424,30 @@ class AlbumsView(ctk.CTkFrame):
             self.after(300, lambda: setattr(self, '_is_loading_more', False))
 
     def load_albums(self):
-        """Load all albums from database and refresh grid."""
+        """Load all albums from database immediately (<5ms) and refresh grid, then sync cloud in background."""
         import threading
         active_acc = self.config_mgr.get_active_account()
         email = active_acc.get("email", "") if active_acc else ""
+        sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
 
+        # 1. Immediate render from local SQLite: 0ms delay!
+        self._all_albums = self.db.get_all_albums(email, sync_roots=sync_folders)
+        self._on_search()
+
+        # 2. Background sync to fetch any newly created cloud albums
         def _bg_load():
             uploader = self.get_uploader() if self.get_uploader else None
             if uploader and hasattr(uploader, "sync_cloud_albums"):
                 try:
                     uploader.sync_cloud_albums()
+                    refreshed = self.db.get_all_albums(email, sync_roots=sync_folders)
+                    def _update_ui():
+                        if self._all_albums != refreshed:
+                            self._all_albums = refreshed
+                            self._on_search()
+                    self.after(0, _update_ui)
                 except Exception:
                     pass
-            sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
-            albums = self.db.get_all_albums(email, sync_roots=sync_folders)
-            def _update_ui():
-                self._all_albums = albums
-                self._on_search()
-            self.after(0, _update_ui)
 
         threading.Thread(target=_bg_load, daemon=True).start()
 

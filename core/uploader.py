@@ -1175,6 +1175,14 @@ class PhotoUploader:
             if self._cloud_albums_cache and not force:
                 return {k: {"key": v} for k, v in self._cloud_albums_cache.items()}
             try:
+                if not getattr(self, "_client", None):
+                    try:
+                        self._init_client()
+                    except Exception:
+                        return {}
+                if not getattr(self, "_client", None):
+                    return {}
+
                 albums = sync_cloud_albums(
                     api=self._client.api,
                     db=self.db,

@@ -627,8 +627,8 @@ class UploadDatabase:
         albums_dict = {}
         with self._get_connection() as conn:
             # 1. Registered albums in albums table
-            q_alb = "SELECT album_name, album_media_key, created_at, remote_count, cover_media_key FROM albums WHERE (account_email = ? OR account_email = '' OR account_email IS NULL)"
-            for row in conn.execute(q_alb, (account_email,)).fetchall():
+            q_alb = "SELECT album_name, album_media_key, created_at, remote_count, cover_media_key FROM albums WHERE (? = '' OR account_email = ? OR account_email = '' OR account_email IS NULL)"
+            for row in conn.execute(q_alb, (account_email, account_email)).fetchall():
                 name = row["album_name"]
                 if is_subfolder_artifact(name):
                     continue
@@ -644,8 +644,8 @@ class UploadDatabase:
                 }
 
             # 2. Add counts from album_items
-            q_items = "SELECT album_name, COUNT(DISTINCT media_key) as cnt, MIN(media_key) as cover_key FROM album_items WHERE (account_email = ? OR account_email = '' OR account_email IS NULL) GROUP BY album_name"
-            for row in conn.execute(q_items, (account_email,)).fetchall():
+            q_items = "SELECT album_name, COUNT(DISTINCT media_key) as cnt, MIN(media_key) as cover_key FROM album_items WHERE (? = '' OR account_email = ? OR account_email = '' OR account_email IS NULL) GROUP BY album_name"
+            for row in conn.execute(q_items, (account_email, account_email)).fetchall():
                 name = row["album_name"]
                 if is_subfolder_artifact(name):
                     continue
@@ -666,12 +666,12 @@ class UploadDatabase:
             # 3. Discover folder-based albums from uploads table
             # Cached per directory to process tens of thousands of files in milliseconds
             q_uploads = """SELECT local_path, media_key FROM uploads 
-                          WHERE status = 'success' AND (account_email = ? OR account_email = '' OR account_email IS NULL)"""
+                          WHERE status = 'success' AND (? = '' OR account_email = ? OR account_email = '' OR account_email IS NULL)"""
             folder_counts = {}  # album_name -> count
             folder_first = {}   # album_name -> (local_path, media_key)
             dir_cache = {}      # dir_path -> album_name
 
-            for row in conn.execute(q_uploads, (account_email,)).fetchall():
+            for row in conn.execute(q_uploads, (account_email, account_email)).fetchall():
                 p_str = row["local_path"]
                 if not p_str:
                     continue

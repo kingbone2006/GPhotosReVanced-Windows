@@ -133,6 +133,10 @@ def apply_network_optimizations() -> None:
                     self.update(task_id, total=total)
                 return _Reader(bio, self, task_id, close_handle=True)
 
+            # For large files / videos read directly from disk, ensure high-throughput 4MB OS buffer
+            if buffering == -1 and "b" in mode:
+                buffering = 4 * 1024 * 1024
+
             return _orig_progress_open(self, file, mode, buffering, encoding, errors, newline, total=total, task_id=task_id, description=description)
 
         Progress.open = _fast_ram_progress_open

@@ -15,9 +15,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Max memory allocated for in-flight upload buffers (4.0 GB)
-DEFAULT_MAX_RAM_POOL = 4 * 1024 * 1024 * 1024  # 4 GB
-MAX_SINGLE_FILE_RAM = 1536 * 1024 * 1024       # 1.5 GB max per file in RAM
+# Max memory allocated for in-flight upload buffers (8.0 GB for 32GB RAM systems)
+DEFAULT_MAX_RAM_POOL = 8 * 1024 * 1024 * 1024  # 8 GB pool
+MAX_SINGLE_FILE_RAM = 3072 * 1024 * 1024       # 3.0 GB max per single file in RAM
 
 
 class RAMCacheManager:

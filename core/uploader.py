@@ -441,12 +441,15 @@ def get_failed_files_from_log(
 def sync_cloud_albums(
     api=None,
     db: Optional[UploadDatabase] = None,
-    account_email: str = ""
+    account_email: str = "",
+    target_album_names: Optional[Sequence[str]] = None,
+    max_pages: int = 30,
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     Fetches all collections (albums) from Google Photos cloud via get_library_state.
-    Stores and caches album_media_key, remote count, and cover for each album in the database.
-    Guarantees that existing cloud albums are reused and never duplicated.
+    Stores and caches album_media_key, remote count, cover, and paginates through library
+    items to fully populate albums in the local database.
     """
     if api is None:
         return {}
@@ -522,12 +525,10 @@ def sync_cloud_albums(
 
             # Also map library items to their respective cloud albums in album_items
             col_key_to_title = {info["key"]: title for title, info in cloud_albums.items()}
-            raw_items = root.get("2", [])
-            if isinstance(raw_items, dict):
-                raw_items = [raw_items]
-            if isinstance(raw_items, list) and raw_items:
-                album_items_batch: Dict[str, list] = {}
-                for it in raw_items:
+
+            def _process_items_batch(raw_list: list):
+                batch: Dict[str, list] = {}
+                for it in raw_list:
                     if not isinstance(it, dict):
                         continue
                     mkey = _to_str(it.get("1"))
@@ -536,15 +537,67 @@ def sync_cloud_albums(
                         continue
                     c1 = d2.get("1") if isinstance(d2, dict) else {}
                     cid = _to_str(c1.get("1") if isinstance(c1, dict) else "")
+                    fname = _to_str(d2.get("4"))
+                    fsize = 0
+                    try:
+                        fsize = int(d2.get("10", 0))
+                    except (ValueError, TypeError):
+                        fsize = 0
                     if cid and cid in col_key_to_title and mkey:
                         aname = col_key_to_title[cid]
-                        album_items_batch.setdefault(aname, []).append(mkey)
-
-                for aname, mkeys in album_items_batch.items():
+                        batch.setdefault(aname, []).append({
+                            "media_key": mkey,
+                            "filename": fname,
+                            "file_size": fsize
+                        })
+                for aname, items in batch.items():
                     try:
-                        db.record_album_items(album_name=aname, media_keys=mkeys, account_email=account_email)
+                        db.record_album_items(album_name=aname, media_keys=items, account_email=account_email)
                     except Exception:
                         pass
+
+            # Process page 0 items
+            raw_items = root.get("2", [])
+            if isinstance(raw_items, dict):
+                raw_items = [raw_items]
+            if isinstance(raw_items, list) and raw_items:
+                _process_items_batch(raw_items)
+
+            # Paginate through remaining library pages to retrieve complete album contents
+            resume_token = _to_str(root.get("1"))
+            pages_fetched = 0
+            while resume_token and pages_fetched < max_pages:
+                # If target albums are specified, check if all targets are already satisfied
+                if target_album_names:
+                    all_satisfied = True
+                    for t_name in target_album_names:
+                        exp = cloud_albums.get(t_name, {}).get("total", 0)
+                        if exp > 0:
+                            current_cnt = len(db.get_album_photos(t_name, account_email))
+                            if current_cnt < exp:
+                                all_satisfied = False
+                                break
+                    if all_satisfied:
+                        break
+
+                try:
+                    p_res = api.get_library_page_init(resume_token)
+                    p_root = p_res.get("1", {}) if isinstance(p_res, dict) else {}
+                    resume_token = _to_str(p_root.get("1"))
+                    p_items = p_root.get("2", [])
+                    if isinstance(p_items, dict):
+                        p_items = [p_items]
+                    if isinstance(p_items, list) and p_items:
+                        _process_items_batch(p_items)
+
+                    pages_fetched += 1
+                    if progress_callback:
+                        try:
+                            progress_callback(pages_fetched, max_pages)
+                        except Exception:
+                            pass
+                except Exception:
+                    break
 
         return cloud_albums
     except Exception:

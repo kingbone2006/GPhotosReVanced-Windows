@@ -837,6 +837,31 @@ class AlbumsView(ctk.CTkFrame):
     # =========================================================================
     # Album Detail Photos View Mode
     # =========================================================================
+    def _get_api_client(self):
+        """Helper to obtain or create an initialized Google Photos API client."""
+        if self.get_uploader:
+            uploader = self.get_uploader()
+            if uploader:
+                if not getattr(uploader, "_client", None):
+                    try:
+                        uploader._init_client()
+                    except Exception:
+                        pass
+                if getattr(uploader, "_client", None):
+                    return uploader._client.api
+
+        active_acc = self.config_mgr.get_active_account()
+        if active_acc:
+            auth_data = active_acc.get("auth_data")
+            if auth_data:
+                try:
+                    import gpmc
+                    temp_client = gpmc.Client(auth_data=auth_data)
+                    return temp_client.api
+                except Exception:
+                    pass
+        return None
+
     def _open_album_photos(self, album_name: str):
         self._current_viewing_album = album_name
         self._is_loading_more = False
@@ -844,6 +869,9 @@ class AlbumsView(ctk.CTkFrame):
         email = active_acc.get("email", "") if active_acc else ""
         sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
         photos = self.db.get_album_photos(album_name, email, sync_roots=sync_folders)
+
+        album_meta = next((a for a in self._all_albums if a.get("album_name") == album_name), None)
+        remote_cnt = album_meta.get("photo_count", 0) if album_meta else 0
 
         self.albums_scroll.pack_forget()
         self.photos_container.pack(fill="both", expand=True)
@@ -855,6 +883,9 @@ class AlbumsView(ctk.CTkFrame):
             count_str = f"{len(photos)} mục: {num_imgs} ảnh, {num_vids} video"
         else:
             count_str = f"{len(photos)} ảnh"
+
+        if remote_cnt > len(photos):
+            count_str += f" (Đang tải đủ {remote_cnt} mục từ Cloud...)"
 
         self.lbl_viewing_album_title.configure(
             text=f"📁 {album_name} ({count_str})"
@@ -869,14 +900,48 @@ class AlbumsView(ctk.CTkFrame):
         if not photos:
             lbl_empty = ctk.CTkLabel(
                 self.photos_scroll,
-                text="Chưa có ảnh nào trong album này.",
+                text="Đang đồng bộ danh sách ảnh từ Google Photos..." if remote_cnt > 0 else "Chưa có ảnh nào trong album này.",
                 font=ctk.CTkFont(size=13),
                 text_color="#71717a"
             )
             lbl_empty.pack(expand=True, pady=40)
+        else:
+            self._render_album_detail_photos_page()
+
+        if remote_cnt > len(photos):
+            self._sync_album_in_background(album_name, email, sync_folders, remote_cnt)
+
+    def _sync_album_in_background(self, album_name: str, email: str, sync_folders: list, target_count: int):
+        """Fetch remaining pages from Cloud in background to populate complete album items."""
+        api_client = self._get_api_client()
+        if not api_client:
             return
 
-        self._render_album_detail_photos_page()
+        def worker():
+            from core.uploader import sync_cloud_albums
+            sync_cloud_albums(
+                api=api_client,
+                db=self.db,
+                account_email=email,
+                target_album_names=[album_name],
+                max_pages=60
+            )
+            new_photos = self.db.get_album_photos(album_name, email, sync_roots=sync_folders)
+            def update_ui():
+                if self._current_viewing_album == album_name:
+                    self._album_photos_list = new_photos
+                    self._album_photos_page = 0
+                    video_exts = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"}
+                    num_vids = sum(1 for p in new_photos if Path(p.get("filename", "")).suffix.lower() in video_exts)
+                    num_imgs = len(new_photos) - num_vids
+                    count_str = f"{len(new_photos)} mục: {num_imgs} ảnh, {num_vids} video" if num_vids > 0 else f"{len(new_photos)} ảnh"
+                    self.lbl_viewing_album_title.configure(text=f"📁 {album_name} ({count_str})")
+                    for w in self.photos_scroll.winfo_children():
+                        w.destroy()
+                    self._render_album_detail_photos_page()
+            self.after(0, update_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _render_album_detail_photos_page(self):
         """Render the next page of photos inside the current album view."""
@@ -1038,51 +1103,45 @@ class AlbumsView(ctk.CTkFrame):
         active_acc = self.config_mgr.get_active_account()
         email = active_acc.get("email", "") if active_acc else ""
         sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
-
-        api_client = None
-        if self.get_uploader:
-            uploader = self.get_uploader()
-            if uploader:
-                if not uploader._client:
-                    try:
-                        uploader._init_client()
-                    except Exception:
-                        pass
-                if uploader._client:
-                    api_client = uploader._client.api
-
-        if not api_client and active_acc:
-            auth_data = active_acc.get("auth_data")
-            if auth_data:
-                try:
-                    import gpmc
-                    temp_client = gpmc.Client(auth_data=auth_data)
-                    api_client = temp_client.api
-                except Exception:
-                    pass
-
-        payload = []
-        for name in album_names:
-            photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
-            if not photos and api_client:
-                try:
-                    from core.uploader import sync_cloud_albums
-                    sync_cloud_albums(api=api_client, db=self.db, account_email=email)
-                    photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
-                except Exception:
-                    pass
-            payload.append({
-                "album_name": name,
-                "items": photos
-            })
+        api_client = self._get_api_client()
 
         dlg = DownloadProgressDialog(self.winfo_toplevel(), album_names, dest_root)
-
         downloader = AlbumDownloader(api=api_client, max_threads=4)
         self._downloader = downloader
 
         def run():
             try:
+                # 1. Sync full album contents from cloud if local count < remote count
+                albums_to_sync = []
+                for name in album_names:
+                    album_meta = next((a for a in self._all_albums if a.get("album_name") == name), None)
+                    remote_cnt = album_meta.get("photo_count", 0) if album_meta else 0
+                    current_photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
+                    if len(current_photos) < remote_cnt:
+                        albums_to_sync.append(name)
+
+                if albums_to_sync and api_client:
+                    self.after(0, lambda: dlg.set_status(f"Đang đồng bộ danh sách ảnh từ Google Photos ({len(albums_to_sync)} album)..."))
+                    from core.uploader import sync_cloud_albums
+                    sync_cloud_albums(
+                        api=api_client,
+                        db=self.db,
+                        account_email=email,
+                        target_album_names=albums_to_sync,
+                        max_pages=60,
+                        progress_callback=lambda cur, tot: self.after(0, lambda: dlg.set_status(f"Đang đồng bộ ảnh từ Google Photos (trang {cur})..."))
+                    )
+
+                # 2. Build complete payload with up-to-date photo list
+                payload = []
+                for name in album_names:
+                    photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
+                    payload.append({
+                        "album_name": name,
+                        "items": photos
+                    })
+
+                self.after(0, lambda: dlg.set_status("Đang bắt đầu tải tệp về máy..."))
                 res = downloader.download_albums(
                     albums=payload,
                     destination_root=dest_root,
@@ -1100,6 +1159,7 @@ class DownloadProgressDialog(ctk.CTkToplevel):
     def __init__(self, parent, album_names: List[str], dest_dir: Path):
         super().__init__(parent)
         self.dest_dir = dest_dir
+        self.album_names = album_names
         self.title(t("downloading_album_title"))
         self.geometry("520x240")
         self.resizable(False, False)
@@ -1141,6 +1201,9 @@ class DownloadProgressDialog(ctk.CTkToplevel):
             fg_color="#15803d",
             hover_color="#166534"
         )
+
+    def set_status(self, text: str):
+        self.lbl_status.configure(text=text)
 
     def update_progress(self, data: dict):
         curr_alb = data.get("current_album", "")
@@ -1190,7 +1253,13 @@ class DownloadProgressDialog(ctk.CTkToplevel):
 
     def _open_folder(self):
         try:
-            os.startfile(self.dest_dir)
+            from core.downloader import sanitize_folder_name
+            target = self.dest_dir
+            if len(self.album_names) == 1:
+                sub = self.dest_dir / sanitize_folder_name(self.album_names[0])
+                if sub.exists():
+                    target = sub
+            os.startfile(target)
         except Exception:
             pass
         self.destroy()

@@ -96,6 +96,13 @@ class UploadDatabase:
                     )
                 """)
 
+                pragma_ai = conn.execute("PRAGMA table_info(album_items)").fetchall()
+                ai_cols = [col[1] for col in pragma_ai] if pragma_ai else []
+                if pragma_ai and "filename" not in ai_cols:
+                    conn.execute("ALTER TABLE album_items ADD COLUMN filename TEXT DEFAULT '';")
+                if pragma_ai and "file_size" not in ai_cols:
+                    conn.execute("ALTER TABLE album_items ADD COLUMN file_size INTEGER DEFAULT 0;")
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS ignored_albums (
                         account_email TEXT NOT NULL DEFAULT '',
@@ -197,23 +204,51 @@ class UploadDatabase:
                 return cur.fetchone() is not None
 
     def record_album_items(self, album_name: str, media_keys: List[Any], account_email: str = "") -> None:
-        """Record media keys as successfully added to an album."""
+        """Record media keys or item tuples/dicts as successfully added to an album."""
         if not media_keys:
             return
-        clean_keys = []
-        for mk in media_keys:
-            if isinstance(mk, bytes):
-                mk = mk.decode("utf-8", errors="replace")
-            mk_str = str(mk).strip()
+        clean_rows = []
+        for item in media_keys:
+            if isinstance(item, dict):
+                raw_mk = item.get("media_key", "")
+                fname = item.get("filename", "")
+                fsize = item.get("file_size", 0)
+            elif isinstance(item, (tuple, list)):
+                raw_mk = item[0] if len(item) > 0 else ""
+                fname = item[1] if len(item) > 1 else ""
+                fsize = item[2] if len(item) > 2 else 0
+            else:
+                raw_mk = item
+                fname = ""
+                fsize = 0
+
+            if isinstance(raw_mk, bytes):
+                raw_mk = raw_mk.decode("utf-8", errors="replace")
+            mk_str = str(raw_mk or "").strip()
+            if isinstance(fname, bytes):
+                fname = fname.decode("utf-8", errors="replace")
+            fname_str = str(fname or "").strip()
+            try:
+                fsize_int = int(fsize or 0)
+            except (ValueError, TypeError):
+                fsize_int = 0
+
             if mk_str:
-                clean_keys.append((account_email, album_name, mk_str))
-        if not clean_keys:
+                clean_rows.append((account_email, album_name, mk_str, fname_str, fsize_int))
+
+        if not clean_rows:
             return
         with self._lock:
             with self._get_connection() as conn:
                 conn.executemany(
-                    "INSERT OR IGNORE INTO album_items (account_email, album_name, media_key) VALUES (?, ?, ?)",
-                    clean_keys
+                    """
+                    INSERT INTO album_items (account_email, album_name, media_key, filename, file_size)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(account_email, album_name, media_key) DO UPDATE SET
+                        filename = CASE WHEN excluded.filename != '' THEN excluded.filename ELSE album_items.filename END,
+                        file_size = CASE WHEN excluded.file_size > 0 THEN excluded.file_size ELSE album_items.file_size END
+                    """,
+                    clean_rows
                 )
                 conn.commit()
 
@@ -699,7 +734,11 @@ class UploadDatabase:
         with self._get_connection() as conn:
             # 1. Look in album_items joined with uploads (LEFT JOIN so cloud-only items are never lost)
             q1 = """
-            SELECT ai.media_key, ai.account_email, u.filename, u.local_path, u.file_size, u.uploaded_at
+            SELECT ai.media_key, ai.account_email, 
+                   COALESCE(NULLIF(u.filename, ''), NULLIF(ai.filename, ''), '') as filename,
+                   u.local_path, 
+                   COALESCE(NULLIF(u.file_size, 0), ai.file_size, 0) as file_size, 
+                   u.uploaded_at
             FROM album_items ai
             LEFT JOIN uploads u ON (ai.media_key = u.media_key OR CAST(ai.media_key AS TEXT) = u.media_key)
             WHERE ai.album_name = ? AND (? = '' OR ai.account_email = ? OR ai.account_email = '' OR ai.account_email IS NULL)

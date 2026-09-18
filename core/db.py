@@ -125,6 +125,12 @@ class UploadDatabase:
                 conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_album_items ON album_items(account_email, album_name)
                 """)
+                # Migrate BLOB media_keys to clean TEXT strings
+                try:
+                    conn.execute("UPDATE album_items SET media_key = CAST(media_key AS TEXT) WHERE typeof(media_key) = 'blob';")
+                    conn.execute("UPDATE uploads SET media_key = CAST(media_key AS TEXT) WHERE typeof(media_key) = 'blob';")
+                except Exception:
+                    pass
                 conn.commit()
 
     def get_album_key(self, album_name: str, account_email: str = "") -> Optional[str]:
@@ -190,15 +196,24 @@ class UploadDatabase:
                 )
                 return cur.fetchone() is not None
 
-    def record_album_items(self, album_name: str, media_keys: List[str], account_email: str = "") -> None:
+    def record_album_items(self, album_name: str, media_keys: List[Any], account_email: str = "") -> None:
         """Record media keys as successfully added to an album."""
         if not media_keys:
+            return
+        clean_keys = []
+        for mk in media_keys:
+            if isinstance(mk, bytes):
+                mk = mk.decode("utf-8", errors="replace")
+            mk_str = str(mk).strip()
+            if mk_str:
+                clean_keys.append((account_email, album_name, mk_str))
+        if not clean_keys:
             return
         with self._lock:
             with self._get_connection() as conn:
                 conn.executemany(
                     "INSERT OR IGNORE INTO album_items (account_email, album_name, media_key) VALUES (?, ?, ?)",
-                    [(account_email, album_name, mk) for mk in media_keys]
+                    clean_keys
                 )
                 conn.commit()
 
@@ -682,27 +697,41 @@ class UploadDatabase:
         """
         photos = []
         with self._get_connection() as conn:
-            # 1. Look in album_items joined with uploads
+            # 1. Look in album_items joined with uploads (LEFT JOIN so cloud-only items are never lost)
             q1 = """
-            SELECT u.filename, u.local_path, u.media_key, u.file_size, u.uploaded_at
+            SELECT ai.media_key, ai.account_email, u.filename, u.local_path, u.file_size, u.uploaded_at
             FROM album_items ai
-            JOIN uploads u ON ai.media_key = u.media_key
+            LEFT JOIN uploads u ON (ai.media_key = u.media_key OR CAST(ai.media_key AS TEXT) = u.media_key)
             WHERE ai.album_name = ? AND (? = '' OR ai.account_email = ? OR ai.account_email = '' OR ai.account_email IS NULL)
             """
             seen_keys = set()
             seen_paths = set()
-            for row in conn.execute(q1, (album_name, account_email, account_email)).fetchall():
+            for idx, row in enumerate(conn.execute(q1, (album_name, account_email, account_email)).fetchall(), 1):
+                raw_mk = row["media_key"]
+                if isinstance(raw_mk, bytes):
+                    mk_str = raw_mk.decode("utf-8", errors="replace").strip()
+                else:
+                    mk_str = str(raw_mk or "").strip()
+                if not mk_str or mk_str in seen_keys:
+                    continue
+                seen_keys.add(mk_str)
+
+                fname = row["filename"]
+                if not fname:
+                    safe_alb = "".join(c for c in album_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+                    fname = f"{safe_alb}_{idx:04d}.jpg"
+
+                lpath = row["local_path"]
+                if lpath:
+                    seen_paths.add(lpath)
+
                 photos.append({
-                    "filename": row["filename"],
-                    "local_path": row["local_path"],
-                    "media_key": row["media_key"],
-                    "file_size": row["file_size"],
-                    "uploaded_at": row["uploaded_at"]
+                    "filename": fname,
+                    "local_path": lpath,
+                    "media_key": mk_str,
+                    "file_size": row["file_size"] or 0,
+                    "uploaded_at": row["uploaded_at"] or ""
                 })
-                if row["media_key"]:
-                    seen_keys.add(row["media_key"])
-                if row["local_path"]:
-                    seen_paths.add(row["local_path"])
 
             # 2. Also check uploads table to include any uploaded photos/videos of this album
             from pathlib import Path

@@ -1039,23 +1039,46 @@ class AlbumsView(ctk.CTkFrame):
         email = active_acc.get("email", "") if active_acc else ""
         sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
 
+        api_client = None
+        if self.get_uploader:
+            uploader = self.get_uploader()
+            if uploader:
+                if not uploader._client:
+                    try:
+                        uploader._init_client()
+                    except Exception:
+                        pass
+                if uploader._client:
+                    api_client = uploader._client.api
+
+        if not api_client and active_acc:
+            auth_data = active_acc.get("auth_data")
+            if auth_data:
+                try:
+                    import gpmc
+                    temp_client = gpmc.Client(auth_data=auth_data)
+                    api_client = temp_client.api
+                except Exception:
+                    pass
+
         payload = []
         for name in album_names:
             photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
+            if not photos and api_client:
+                try:
+                    from core.uploader import sync_cloud_albums
+                    sync_cloud_albums(api=api_client, db=self.db, account_email=email)
+                    photos = self.db.get_album_photos(name, email, sync_roots=sync_folders)
+                except Exception:
+                    pass
             payload.append({
                 "album_name": name,
                 "items": photos
             })
 
-        api_client = None
-        if self.get_uploader:
-            uploader = self.get_uploader()
-            if uploader and uploader._client:
-                api_client = uploader._client.api
-
         dlg = DownloadProgressDialog(self.winfo_toplevel(), album_names, dest_root)
 
-        downloader = AlbumDownloader(api=api_client)
+        downloader = AlbumDownloader(api=api_client, max_threads=4)
         self._downloader = downloader
 
         def run():
@@ -1138,12 +1161,25 @@ class DownloadProgressDialog(ctk.CTkToplevel):
         self.progress_bar.set(1.0)
         cnt = res.get("files_count", 0)
         albs = res.get("albums_count", 0)
+        err = res.get("error_count", 0)
         dest = res.get("destination", "")
 
-        self.lbl_status.configure(
-            text=f"✅ Hoàn tất! Đã lưu {albs} album ({cnt} ảnh) an toàn vào máy.",
-            text_color="#4ade80"
-        )
+        if cnt > 0:
+            self.lbl_status.configure(
+                text=f"✅ Hoàn tất! Đã lưu {albs} album ({cnt} tệp) vào máy.",
+                text_color="#4ade80"
+            )
+        else:
+            if err > 0:
+                self.lbl_status.configure(
+                    text=f"⚠️ Tải thất bại ({err} lỗi). Vui lòng kiểm tra lại kết nối mạng.",
+                    text_color="#f59e0b"
+                )
+            else:
+                self.lbl_status.configure(
+                    text=f"ℹ️ Album này chưa có ảnh/video nào trong thư viện.",
+                    text_color="#94a3b8"
+                )
         self.btn_open_folder.pack(pady=10)
 
     def on_error(self, err_msg: str):

@@ -520,6 +520,32 @@ def sync_cloud_albums(
                 except Exception:
                     pass
 
+            # Also map library items to their respective cloud albums in album_items
+            col_key_to_title = {info["key"]: title for title, info in cloud_albums.items()}
+            raw_items = root.get("2", [])
+            if isinstance(raw_items, dict):
+                raw_items = [raw_items]
+            if isinstance(raw_items, list) and raw_items:
+                album_items_batch: Dict[str, list] = {}
+                for it in raw_items:
+                    if not isinstance(it, dict):
+                        continue
+                    mkey = _to_str(it.get("1"))
+                    d2 = it.get("2") or it.get("2-1") or {}
+                    if not isinstance(d2, dict):
+                        continue
+                    c1 = d2.get("1") if isinstance(d2, dict) else {}
+                    cid = _to_str(c1.get("1") if isinstance(c1, dict) else "")
+                    if cid and cid in col_key_to_title and mkey:
+                        aname = col_key_to_title[cid]
+                        album_items_batch.setdefault(aname, []).append(mkey)
+
+                for aname, mkeys in album_items_batch.items():
+                    try:
+                        db.record_album_items(album_name=aname, media_keys=mkeys, account_email=account_email)
+                    except Exception:
+                        pass
+
         return cloud_albums
     except Exception:
         return {}

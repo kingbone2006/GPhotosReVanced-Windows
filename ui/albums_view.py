@@ -17,6 +17,7 @@ import customtkinter as ctk
 from core.db import UploadDatabase
 from core.downloader import AlbumDownloader, sanitize_folder_name
 from core.i18n import t
+from core.thumb_manager import CloudThumbManager
 from ui.upload_tray import get_file_thumbnail
 
 
@@ -35,6 +36,7 @@ class AlbumsView(ctk.CTkFrame):
         self.config_mgr = config_mgr
         self.get_uploader = get_uploader_func
 
+        self._cloud_thumb_mgr = CloudThumbManager()
         self._all_albums: List[Dict[str, Any]] = []
         self._filtered_albums: List[Dict[str, Any]] = []
         self._selected_album_names: set = set()
@@ -47,6 +49,7 @@ class AlbumsView(ctk.CTkFrame):
         self._album_photos_list: List[Dict[str, Any]] = []
         self._album_photos_page = 0
         self._is_loading_more = False
+        self._is_syncing_album = False
 
         # Build UI Structure
         self._build_header()
@@ -347,7 +350,26 @@ class AlbumsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._download_current_album
         )
-        self.btn_download_this.pack(side="right", padx=(10, 4), pady=8)
+        self.btn_download_this.pack(side="right", padx=(4, 4), pady=8)
+
+        self.btn_sync_this = ctk.CTkButton(
+            p_header,
+            text="🔄 Đồng bộ từ Cloud",
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._manual_sync_current_album
+        )
+        self.btn_sync_this.pack(side="right", padx=(4, 4), pady=8)
+
+        self.lbl_sync_status = ctk.CTkLabel(
+            p_header,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#38bdf8"
+        )
+        self.lbl_sync_status.pack(side="right", padx=8)
 
         # Scroll area for photos
         self.photos_scroll = ctk.CTkScrollableFrame(
@@ -439,7 +461,7 @@ class AlbumsView(ctk.CTkFrame):
             uploader = self.get_uploader() if self.get_uploader else None
             if uploader and hasattr(uploader, "sync_cloud_albums"):
                 try:
-                    uploader.sync_cloud_albums()
+                    uploader.sync_cloud_albums(max_pages=0)
                     refreshed = self.db.get_all_albums(email, sync_roots=sync_folders)
                     def _update_ui():
                         if self._all_albums != refreshed:
@@ -631,6 +653,17 @@ class AlbumsView(ctk.CTkFrame):
                 thumb = get_file_thumbnail(Path(cover_path), size=(130, 100))
                 if thumb:
                     lbl_cover.configure(image=thumb, text="")
+            elif album.get("cover_media_key"):
+                cover_key = album.get("cover_media_key")
+                c_thumb = self._cloud_thumb_mgr.get_thumbnail(
+                    media_key=cover_key,
+                    size=(130, 100),
+                    api_client_provider=self._get_api_client,
+                    widget_to_bind=lbl_cover
+                )
+                if c_thumb:
+                    lbl_cover.configure(image=c_thumb, text="")
+                    lbl_cover.image = c_thumb
 
             bottom_bar = ctk.CTkFrame(card, fg_color="transparent")
             bottom_bar.pack(fill="x", padx=10, pady=(4, 10))
@@ -766,6 +799,17 @@ class AlbumsView(ctk.CTkFrame):
                 t_img = get_file_thumbnail(Path(local_path), size=(120, 100))
                 if t_img:
                     lbl_img.configure(image=t_img, text="")
+            elif photo.get("media_key"):
+                m_key = photo.get("media_key")
+                c_img = self._cloud_thumb_mgr.get_thumbnail(
+                    media_key=m_key,
+                    size=(120, 100),
+                    api_client_provider=self._get_api_client,
+                    widget_to_bind=lbl_img
+                )
+                if c_img:
+                    lbl_img.configure(image=c_img, text="")
+                    lbl_img.image = c_img
 
             disp_fname = filename if len(filename) <= 18 else filename[:14] + "..." + Path(filename).suffix
             ctk.CTkLabel(
@@ -868,6 +912,30 @@ class AlbumsView(ctk.CTkFrame):
                     pass
         return None
 
+    def _update_album_title(self, album_name: str, cur_count: int, target_count: int = 0):
+        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"}
+        num_vids = sum(1 for p in self._album_photos_list if Path(p.get("filename", "")).suffix.lower() in video_exts)
+        num_imgs = len(self._album_photos_list) - num_vids
+        if num_vids > 0:
+            count_str = f"{len(self._album_photos_list)} mục: {num_imgs} ảnh, {num_vids} video"
+        else:
+            count_str = f"{len(self._album_photos_list)} ảnh"
+
+        if target_count and target_count > len(self._album_photos_list):
+            count_str += f" (Đang tìm đủ {target_count} mục từ Cloud...)"
+
+        self.lbl_viewing_album_title.configure(text=f"📁 {album_name} ({count_str})")
+
+    def _manual_sync_current_album(self):
+        if not self._current_viewing_album:
+            return
+        active_acc = self.config_mgr.get_active_account()
+        email = active_acc.get("email", "") if active_acc else ""
+        sync_folders = self.config_mgr.config.get("sync_folders", []) if self.config_mgr else []
+        album_meta = next((a for a in self._all_albums if a.get("album_name") == self._current_viewing_album), None)
+        remote_cnt = album_meta.get("photo_count", 0) if album_meta else 0
+        self._sync_album_in_background(self._current_viewing_album, email, sync_folders, remote_cnt, force=True)
+
     def _open_album_photos(self, album_name: str):
         self._current_viewing_album = album_name
         self._is_loading_more = False
@@ -882,26 +950,15 @@ class AlbumsView(ctk.CTkFrame):
         self.albums_scroll.pack_forget()
         self.photos_container.pack(fill="both", expand=True)
 
-        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"}
-        num_vids = sum(1 for p in photos if Path(p.get("filename", "")).suffix.lower() in video_exts)
-        num_imgs = len(photos) - num_vids
-        if num_vids > 0:
-            count_str = f"{len(photos)} mục: {num_imgs} ảnh, {num_vids} video"
-        else:
-            count_str = f"{len(photos)} ảnh"
+        self._album_photos_list = photos
+        self._album_photos_page = 0
+        self._update_album_title(album_name, len(photos), remote_cnt)
 
-        if remote_cnt > len(photos):
-            count_str += f" (Đang tải đủ {remote_cnt} mục từ Cloud...)"
-
-        self.lbl_viewing_album_title.configure(
-            text=f"📁 {album_name} ({count_str})"
-        )
+        if hasattr(self, "lbl_sync_status"):
+            self.lbl_sync_status.configure(text="")
 
         for widget in self.photos_scroll.winfo_children():
             widget.destroy()
-
-        self._album_photos_list = photos
-        self._album_photos_page = 0
 
         if not photos:
             lbl_empty = ctk.CTkLabel(
@@ -917,35 +974,78 @@ class AlbumsView(ctk.CTkFrame):
         if remote_cnt > len(photos):
             self._sync_album_in_background(album_name, email, sync_folders, remote_cnt)
 
-    def _sync_album_in_background(self, album_name: str, email: str, sync_folders: list, target_count: int):
+    def _sync_album_in_background(self, album_name: str, email: str, sync_folders: list, target_count: int, force: bool = False):
         """Fetch remaining pages from Cloud in background to populate complete album items."""
+        if self._is_syncing_album and not force:
+            return
         api_client = self._get_api_client()
         if not api_client:
+            if hasattr(self, "lbl_sync_status"):
+                self.lbl_sync_status.configure(text="⚠️ Chưa kết nối Cloud", text_color="#f59e0b")
             return
+
+        self._is_syncing_album = True
+        if hasattr(self, "btn_sync_this"):
+            self.btn_sync_this.configure(state="disabled", text="⏳ Đang quét...")
+        if hasattr(self, "lbl_sync_status"):
+            self.lbl_sync_status.configure(text="⏳ Đang kết nối Cloud...", text_color="#38bdf8")
 
         def worker():
             from core.uploader import sync_cloud_albums
-            sync_cloud_albums(
-                api=api_client,
-                db=self.db,
-                account_email=email,
-                target_album_names=[album_name],
-                max_pages=60
-            )
-            new_photos = self.db.get_album_photos(album_name, email, sync_roots=sync_folders)
-            def update_ui():
-                if self._current_viewing_album == album_name:
-                    self._album_photos_list = new_photos
-                    self._album_photos_page = 0
-                    video_exts = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"}
-                    num_vids = sum(1 for p in new_photos if Path(p.get("filename", "")).suffix.lower() in video_exts)
-                    num_imgs = len(new_photos) - num_vids
-                    count_str = f"{len(new_photos)} mục: {num_imgs} ảnh, {num_vids} video" if num_vids > 0 else f"{len(new_photos)} ảnh"
-                    self.lbl_viewing_album_title.configure(text=f"📁 {album_name} ({count_str})")
-                    for w in self.photos_scroll.winfo_children():
-                        w.destroy()
-                    self._render_album_detail_photos_page()
-            self.after(0, update_ui)
+
+            def on_page_progress(cur_page: int, max_p: int):
+                new_photos = self.db.get_album_photos(album_name, email, sync_roots=sync_folders)
+                def live_update():
+                    if self._current_viewing_album != album_name:
+                        return
+                    cur_cnt = len(new_photos)
+                    if hasattr(self, "lbl_sync_status"):
+                        self.lbl_sync_status.configure(
+                            text=f"⏳ Đang quét Cloud... Trang {cur_page}/{max_p} ({cur_cnt}/{target_count} mục)" if target_count else f"⏳ Trang {cur_page} ({cur_cnt} mục)",
+                            text_color="#38bdf8"
+                        )
+                    if cur_cnt != len(self._album_photos_list):
+                        self._album_photos_list = new_photos
+                        self._album_photos_page = 0
+                        self._update_album_title(album_name, cur_cnt, target_count)
+                        for w in self.photos_scroll.winfo_children():
+                            w.destroy()
+                        self._render_album_detail_photos_page()
+                self.after(0, live_update)
+
+            try:
+                sync_cloud_albums(
+                    api=api_client,
+                    db=self.db,
+                    account_email=email,
+                    target_album_names=[album_name],
+                    max_pages=80,
+                    progress_callback=on_page_progress
+                )
+            except Exception:
+                pass
+            finally:
+                self._is_syncing_album = False
+                final_photos = self.db.get_album_photos(album_name, email, sync_roots=sync_folders)
+                def on_finish():
+                    if hasattr(self, "btn_sync_this"):
+                        self.btn_sync_this.configure(state="normal", text="🔄 Đồng bộ từ Cloud")
+                    if self._current_viewing_album == album_name:
+                        self._album_photos_list = final_photos
+                        self._album_photos_page = 0
+                        f_cnt = len(final_photos)
+                        self._update_album_title(album_name, f_cnt, 0)
+                        if hasattr(self, "lbl_sync_status"):
+                            if target_count and f_cnt >= target_count:
+                                self.lbl_sync_status.configure(text=f"✅ Đã đủ {f_cnt}/{target_count} mục", text_color="#4ade80")
+                            elif f_cnt > 0:
+                                self.lbl_sync_status.configure(text=f"✅ Đã tìm thấy {f_cnt} mục", text_color="#4ade80")
+                            else:
+                                self.lbl_sync_status.configure(text="ℹ️ Không tìm thấy thêm mục nào", text_color="#9ca3af")
+                        for w in self.photos_scroll.winfo_children():
+                            w.destroy()
+                        self._render_album_detail_photos_page()
+                self.after(0, on_finish)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -996,6 +1096,17 @@ class AlbumsView(ctk.CTkFrame):
                     lbl_img.configure(image=t_img, text="")
                 elif is_vid:
                     lbl_img.configure(text="🎬 VIDEO", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38bdf8")
+            elif photo.get("media_key"):
+                m_key = photo.get("media_key")
+                c_img = self._cloud_thumb_mgr.get_thumbnail(
+                    media_key=m_key,
+                    size=(120, 100),
+                    api_client_provider=self._get_api_client,
+                    widget_to_bind=lbl_img
+                )
+                if c_img:
+                    lbl_img.configure(image=c_img, text="")
+                    lbl_img.image = c_img
 
             disp_fname = filename if len(filename) <= 18 else filename[:14] + "..." + Path(filename).suffix
             ctk.CTkLabel(

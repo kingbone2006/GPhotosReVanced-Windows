@@ -443,7 +443,7 @@ def sync_cloud_albums(
     db: Optional[UploadDatabase] = None,
     account_email: str = "",
     target_album_names: Optional[Sequence[str]] = None,
-    max_pages: int = 30,
+    max_pages: int = 0,
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
@@ -596,6 +596,18 @@ def sync_cloud_albums(
                             progress_callback(pages_fetched, max_pages)
                         except Exception:
                             pass
+
+                    if target_album_names:
+                        all_satisfied = True
+                        for t_name in target_album_names:
+                            exp = cloud_albums.get(t_name, {}).get("total", 0)
+                            if exp > 0:
+                                current_cnt = len(db.get_album_photos(t_name, account_email))
+                                if current_cnt < exp:
+                                    all_satisfied = False
+                                    break
+                        if all_satisfied:
+                            break
                 except Exception:
                     break
 
@@ -1166,7 +1178,7 @@ class PhotoUploader:
 
             time.sleep(0.3)
 
-    def sync_cloud_albums(self, force: bool = False) -> Dict[str, Dict[str, Any]]:
+    def sync_cloud_albums(self, force: bool = False, max_pages: int = 0) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all albums from Google Photos cloud via get_library_state.
         Caches album keys in memory and SQLite db to prevent duplicate album creation.
@@ -1186,7 +1198,8 @@ class PhotoUploader:
                 albums = sync_cloud_albums(
                     api=self._client.api,
                     db=self.db,
-                    account_email=self.account_email
+                    account_email=self.account_email,
+                    max_pages=max_pages
                 )
                 for title, info in albums.items():
                     self._cloud_albums_cache[title] = info["key"]

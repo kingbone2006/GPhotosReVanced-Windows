@@ -18,6 +18,7 @@ import mimetypes
 from .db import UploadDatabase
 from .network_optimizer import apply_network_optimizations
 from .hash_pool import MultiCoreHashPool
+from .ram_cache import RAMCacheManager
 
 apply_network_optimizations()
 
@@ -1003,6 +1004,9 @@ class PhotoUploader:
                         "error": str(e),
                     })
             finally:
+                with self._active_lock:
+                    self._active_files.pop(str(file_path), None)
+                RAMCacheManager.get_instance().release(file_path)
                 self._queue.task_done()
 
     def _start_album_flusher(self) -> None:
@@ -1297,8 +1301,17 @@ class PhotoUploader:
             "status": "Đang chuẩn bị...",
         })
 
-        # Calculate SHA-1 with fast 4MB buffered chunks
-        sha1_hash = UploadDatabase.calculate_sha1(file_path)
+        # Pre-load file into RAM cache with throttled sequential disk reading (avoids HDD head thrashing)
+        ram_manager = RAMCacheManager.get_instance()
+        cached_data = ram_manager.read_file_to_ram(file_path)
+        if cached_data is not None:
+            # High-speed SIMD in-memory hash calculation (~2,500 MB/s, sub-second)
+            import hashlib
+            sha1_hash = hashlib.sha1(cached_data).hexdigest()
+        else:
+            # Fallback for huge files > 1.5GB
+            sha1_hash = UploadDatabase.calculate_sha1(file_path)
+
         with self._active_lock:
             if path_str in self._active_files:
                 self._active_files[path_str]["status"] = "Kiểm tra Cloud..."
@@ -1330,7 +1343,8 @@ class PhotoUploader:
                     self._log(f"[Luồng {worker_id}] Lỗi kiểm tra hash trên Google ({e}), tiến hành kiểm tra khi tải...", "WARNING")
 
         if remote_key:
-            # File is confirmed present on Google Photos server
+            # File is confirmed present on Google Photos server -> immediately free RAM buffer
+            ram_manager.release(file_path)
             self.db.record_upload(
                 local_path=path_str,
                 filename=filename,
@@ -1374,20 +1388,37 @@ class PhotoUploader:
             self._log(f"[Luồng {worker_id}] Bắt đầu tải {filename} ({file_size / (1024*1024):.1f} MB)...", "INFO")
 
         # 3. Perform Upload with Pixel XL Unlimited Quota
-        start_time = time.time()
         album_name = determine_album_name(file_path, self.sync_roots) if self.auto_album else None
         is_saver = (self.quality == "saver")
 
+        upload_start_time = None
+        last_bytes = 0
+        last_time = 0.0
+
         def file_progress(event: UploadProgressEvent) -> None:
+            nonlocal upload_start_time, last_bytes, last_time
             now = time.time()
-            elapsed = now - start_time
             done = event.get("bytes_completed", 0)
             total = event.get("bytes_total", file_size) or file_size
             pct = round((done / total) * 100.0, 1) if total > 0 else 0.0
 
+            if upload_start_time is None and done > 0:
+                upload_start_time = now
+                last_time = now
+                last_bytes = done
+
             speed_str = ""
-            if elapsed > 0.3 and done > 0:
-                speed_bps = done / elapsed
+            if upload_start_time and done > 0:
+                dt = now - last_time
+                if dt >= 0.7:
+                    db_bytes = done - last_bytes
+                    speed_bps = db_bytes / dt if dt > 0 else 0
+                    last_time = now
+                    last_bytes = done
+                else:
+                    elapsed = now - upload_start_time
+                    speed_bps = done / elapsed if elapsed > 0.3 else 0
+
                 if speed_bps > 1024 * 1024:
                     speed_str = f"{speed_bps / (1024*1024):.1f} MB/s"
                 else:
@@ -1412,15 +1443,19 @@ class PhotoUploader:
 
         # Upload media item directly (album_name=None prevents simultaneous duplicate create_album calls)
         # Pass pre-calculated sha1_hash and force_upload=True to eliminate duplicate hash checking and prevent 429
-        result = self._client.upload(
-            target={file_path: {"hash": sha1_hash}},
-            album_name=None,
-            use_quota=False,   # <--- UNLIMITED STORAGE PIXEL XL SPOOFING
-            saver=is_saver,
-            threads=1,         # Per-worker thread handles 1 file concurrently
-            force_upload=True, # <--- PREVENTS redundant find_remote_media_by_hash call!
-            progress_callback=file_progress,
-        )
+        try:
+            result = self._client.upload(
+                target={file_path: {"hash": sha1_hash}},
+                album_name=None,
+                use_quota=False,   # <--- UNLIMITED STORAGE PIXEL XL SPOOFING
+                saver=is_saver,
+                threads=1,         # Per-worker thread handles 1 file concurrently
+                force_upload=True, # <--- PREVENTS redundant find_remote_media_by_hash call!
+                progress_callback=file_progress,
+            )
+        finally:
+            # Always release in-memory RAM buffer immediately when upload finishes
+            ram_manager.release(file_path)
 
         posix_path = file_path.absolute().as_posix()
         media_key = result.get(posix_path) or result.get(path_str) or (list(result.values())[0] if result else "")

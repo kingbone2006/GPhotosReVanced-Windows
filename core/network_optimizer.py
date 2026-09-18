@@ -110,3 +110,31 @@ def apply_network_optimizations() -> None:
         gpmc.api.Api._new_session = _patched_new_session
     except Exception:
         pass
+
+    # 4. Patch rich.progress.Progress.open for seamless in-memory RAM streaming
+    try:
+        import io
+        from rich.progress import Progress, _Reader
+        from .ram_cache import RAMCacheManager
+
+        _orig_progress_open = Progress.open
+
+        def _fast_ram_progress_open(self, file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, *, total=None, task_id=None, description="Reading..."):
+            ram_manager = RAMCacheManager.get_instance()
+            cached_data = ram_manager.get(file)
+            if cached_data is not None and "b" in mode:
+                # Use in-memory BytesIO stream directly! Zero disk I/O during upload!
+                bio = io.BytesIO(cached_data)
+                if total is None:
+                    total = len(cached_data)
+                if task_id is None:
+                    task_id = self.add_task(description, total=total)
+                else:
+                    self.update(task_id, total=total)
+                return _Reader(bio, self, task_id, close_handle=True)
+
+            return _orig_progress_open(self, file, mode, buffering, encoding, errors, newline, total=total, task_id=task_id, description=description)
+
+        Progress.open = _fast_ram_progress_open
+    except Exception:
+        pass

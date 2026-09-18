@@ -137,7 +137,7 @@ class MainWindow(ctk.CTk):
         self.btn_account.pack(side="left", padx=(0, 6), pady=4)
 
     def _build_tabs(self):
-        self.tabview = ctk.CTkTabview(self, corner_radius=10)
+        self.tabview = ctk.CTkTabview(self, corner_radius=10, command=self._on_tab_changed)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(10, 10))
 
         self.tab_dashboard = self.tabview.add("dashboard")
@@ -157,6 +157,14 @@ class MainWindow(ctk.CTk):
         self._build_folders_tab()
         self._build_logs_tab()
         self._build_settings_tab()
+
+    def _on_tab_changed(self):
+        try:
+            curr = self.tabview.get()
+            if curr == "albums" and hasattr(self, "albums_view") and self.albums_view:
+                self.albums_view.load_albums()
+        except Exception:
+            pass
 
     def _build_albums_tab(self):
         self.albums_view = AlbumsView(
@@ -1001,13 +1009,21 @@ class MainWindow(ctk.CTk):
 
                     self._refresh_folder_list()
                     self._refresh_stats()
+                    if hasattr(self, "albums_view") and self.albums_view:
+                        self.albums_view.load_albums()
                     self.append_log(f"System ready! Multi-threaded engine ({threads} threads) activated.", "SUCCESS")
 
-                self.after(0, _finish_on_ui)
+                try:
+                    self.after(0, _finish_on_ui)
+                except Exception:
+                    pass
 
             except Exception as e:
-                self.after(0, lambda: self.append_log(f"Engine initialization error: {e}", "ERROR"))
-                self.after(0, lambda: messagebox.showerror(t("alert_error"), f"Could not connect account:\n{e}"))
+                try:
+                    self.after(0, lambda: self.append_log(f"Engine initialization error: {e}", "ERROR"))
+                    self.after(0, lambda: messagebox.showerror(t("alert_error"), f"Could not connect account:\n{e}"))
+                except Exception:
+                    pass
 
         threading.Thread(target=_bg_init, daemon=True).start()
 

@@ -50,6 +50,8 @@ class AlbumsView(ctk.CTkFrame):
         self._album_photos_page = 0
         self._is_loading_more = False
         self._is_syncing_album = False
+        self._cached_api_client = None
+        self._api_client_lock = threading.Lock()
 
         # Build UI Structure
         self._build_header()
@@ -73,8 +75,8 @@ class AlbumsView(ctk.CTkFrame):
         # Infinite Scroll Hooks for albums & photos
         self._setup_infinite_scroll()
 
-        # Load initial data (deferred to let engine init first)
-        self.after(1500, self.load_albums)
+        # Load initial data immediately from local DB (<2ms)
+        self.load_albums()
 
     def _build_header(self):
         self.header_frame = ctk.CTkFrame(self, fg_color="#27272a", corner_radius=10)
@@ -892,24 +894,41 @@ class AlbumsView(ctk.CTkFrame):
         if self.get_uploader:
             uploader = self.get_uploader()
             if uploader:
-                if not getattr(uploader, "_client", None):
+                client = getattr(uploader, "_client", None)
+                if client and hasattr(client, "api"):
+                    return client.api
+
+        if getattr(self, "_cached_api_client", None):
+            return self._cached_api_client
+
+        with self._api_client_lock:
+            if getattr(self, "_cached_api_client", None):
+                return self._cached_api_client
+
+            if self.get_uploader:
+                uploader = self.get_uploader()
+                if uploader:
+                    if not getattr(uploader, "_client", None):
+                        try:
+                            uploader._init_client()
+                        except Exception:
+                            pass
+                    client = getattr(uploader, "_client", None)
+                    if client and hasattr(client, "api"):
+                        self._cached_api_client = client.api
+                        return self._cached_api_client
+
+            active_acc = self.config_mgr.get_active_account()
+            if active_acc:
+                auth_data = active_acc.get("auth_data")
+                if auth_data:
                     try:
-                        uploader._init_client()
+                        import gpmc
+                        temp_client = gpmc.Client(auth_data=auth_data)
+                        self._cached_api_client = temp_client.api
+                        return self._cached_api_client
                     except Exception:
                         pass
-                if getattr(uploader, "_client", None):
-                    return uploader._client.api
-
-        active_acc = self.config_mgr.get_active_account()
-        if active_acc:
-            auth_data = active_acc.get("auth_data")
-            if auth_data:
-                try:
-                    import gpmc
-                    temp_client = gpmc.Client(auth_data=auth_data)
-                    return temp_client.api
-                except Exception:
-                    pass
         return None
 
     def _update_album_title(self, album_name: str, cur_count: int, target_count: int = 0):

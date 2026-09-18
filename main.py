@@ -7,12 +7,23 @@ import sys
 import ctypes
 import logging
 import traceback
+import multiprocessing
 from pathlib import Path
+
+# Required for Windows multiprocessing with PyInstaller / freeze
+multiprocessing.freeze_support()
 
 # Add current directory to path
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+# Apply Gigabit fiber & multi-threaded socket optimizations
+try:
+    from core.network_optimizer import apply_network_optimizations
+    apply_network_optimizations()
+except Exception:
+    pass
 
 # Configure UTF-8 encoding for Windows Console / Terminal
 if sys.platform == "win32":

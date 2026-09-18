@@ -286,19 +286,22 @@ class UploadDatabase:
 
     @staticmethod
     def calculate_sha1(file_path: Path) -> str:
-        """Calculate SHA-1 hash of a file efficiently using 4MB buffered chunks."""
-        hasher = hashlib.sha1()
+        """Calculate SHA-1 hash using multi-core process pool with high-speed buffering."""
         try:
-            with open(file_path, "rb", buffering=4 * 1024 * 1024) as f:
-                while chunk := f.read(4 * 1024 * 1024):
-                    hasher.update(chunk)
-            return hasher.hexdigest()
+            from .hash_pool import MultiCoreHashPool
+            return MultiCoreHashPool.get_instance().compute_sha1(file_path)
         except Exception:
-            # Fallback
-            with open(file_path, "rb") as f:
-                while chunk := f.read(1024 * 1024):
-                    hasher.update(chunk)
-            return hasher.hexdigest()
+            hasher = hashlib.sha1()
+            try:
+                with open(file_path, "rb", buffering=2 * 1024 * 1024) as f:
+                    while chunk := f.read(2 * 1024 * 1024):
+                        hasher.update(chunk)
+                return hasher.hexdigest()
+            except Exception:
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(1024 * 1024):
+                        hasher.update(chunk)
+                return hasher.hexdigest()
 
     def load_fast_cache(self, account_email: str = "") -> None:
         """Pre-load all successful uploads into an in-memory dictionary for microsecond lookups."""

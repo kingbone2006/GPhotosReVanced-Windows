@@ -498,11 +498,11 @@ class MainWindow(ctk.CTk):
         self.lbl_setting_threads = ctk.CTkLabel(t_row, text=t("lbl_threads_setting"), width=200, anchor="w", font=ctk.CTkFont(size=13))
         self.lbl_setting_threads.pack(side="left")
         is_vi = get_language() == "vi"
-        t_vals = ["1", "2", "4 (Khuyên dùng)", "6 (Siêu tốc)", "8 (Tối đa)"] if is_vi else ["1", "2", "4 (Recommended)", "6 (Ultra Speed)", "8 (Maximum)"]
+        t_vals = ["1", "2", "4 (Khuyên dùng)", "6 (Siêu tốc)", "8 (Tốc độ cao)", "12 (Mạng 1Gbps)", "16 (Đa nhân cực đại)"] if is_vi else ["1", "2", "4 (Recommended)", "6 (Ultra Speed)", "8 (High Speed)", "12 (1Gbps Fiber)", "16 (Ultra Multi-Core)"]
         self.combo_threads = ctk.CTkComboBox(
             t_row,
             values=t_vals,
-            width=190
+            width=210
         )
         self.combo_threads.pack(side="left")
         cur_t = self.config_mgr.config.get("threads", 4)
@@ -658,7 +658,7 @@ class MainWindow(ctk.CTk):
 
         self.lbl_setting_threads.configure(text=t("lbl_threads_setting"))
         is_vi = get_language() == "vi"
-        t_vals = ["1", "2", "4 (Khuyên dùng)", "6 (Siêu tốc)", "8 (Tối đa)"] if is_vi else ["1", "2", "4 (Recommended)", "6 (Ultra Speed)", "8 (Maximum)"]
+        t_vals = ["1", "2", "4 (Khuyên dùng)", "6 (Siêu tốc)", "8 (Tốc độ cao)", "12 (Mạng 1Gbps)", "16 (Đa nhân cực đại)"] if is_vi else ["1", "2", "4 (Recommended)", "6 (Ultra Speed)", "8 (High Speed)", "12 (1Gbps Fiber)", "16 (Ultra Multi-Core)"]
         self.combo_threads.configure(values=t_vals)
         cur_t = self.config_mgr.config.get("threads", 4)
         rec_tag = "(Khuyên dùng)" if is_vi else "(Recommended)"
@@ -678,11 +678,25 @@ class MainWindow(ctk.CTk):
         is_vi = get_language() == "vi"
         cur_threads = self.config_mgr.config.get("threads", 4)
         if is_vi:
-            options = ["1 luồng", "2 luồng", "4 luồng (Khuyên dùng)", "6 luồng (Siêu tốc)", "8 luồng (Tối đa)"]
-            sel = f"{cur_threads} luồng (Khuyên dùng)" if cur_threads == 4 else f"{cur_threads} luồng (Siêu tốc)" if cur_threads == 6 else f"{cur_threads} luồng (Tối đa)" if cur_threads == 8 else f"{cur_threads} luồng"
+            options = ["1 luồng", "2 luồng", "4 luồng (Khuyên dùng)", "6 luồng (Siêu tốc)", "8 luồng (Tốc độ cao)", "12 luồng (Mạng 1Gbps)", "16 luồng (Đa nhân cực đại)"]
+            sel = (
+                f"{cur_threads} luồng (Khuyên dùng)" if cur_threads == 4
+                else f"{cur_threads} luồng (Siêu tốc)" if cur_threads == 6
+                else f"{cur_threads} luồng (Tốc độ cao)" if cur_threads == 8
+                else f"{cur_threads} luồng (Mạng 1Gbps)" if cur_threads == 12
+                else f"{cur_threads} luồng (Đa nhân cực đại)" if cur_threads == 16
+                else f"{cur_threads} luồng"
+            )
         else:
-            options = ["1 thread", "2 threads", "4 threads (Recommended)", "6 threads (Ultra Speed)", "8 threads (Maximum)"]
-            sel = f"{cur_threads} threads (Recommended)" if cur_threads == 4 else f"{cur_threads} threads (Ultra Speed)" if cur_threads == 6 else f"{cur_threads} threads (Maximum)" if cur_threads == 8 else f"{cur_threads} threads"
+            options = ["1 thread", "2 threads", "4 threads (Recommended)", "6 threads (Ultra Speed)", "8 threads (High Speed)", "12 threads (1Gbps Fiber)", "16 threads (Ultra Multi-Core)"]
+            sel = (
+                f"{cur_threads} threads (Recommended)" if cur_threads == 4
+                else f"{cur_threads} threads (Ultra Speed)" if cur_threads == 6
+                else f"{cur_threads} threads (High Speed)" if cur_threads == 8
+                else f"{cur_threads} threads (1Gbps Fiber)" if cur_threads == 12
+                else f"{cur_threads} threads (Ultra Multi-Core)" if cur_threads == 16
+                else f"{cur_threads} threads"
+            )
 
         self.combo_quick_threads.configure(values=options)
         self.combo_quick_threads.set(sel)

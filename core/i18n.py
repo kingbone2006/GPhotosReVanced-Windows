@@ -163,8 +163,16 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "vi": "6 luồng (Siêu tốc)",
     },
     "thread_opt_8": {
-        "en": "8 threads (Maximum)",
-        "vi": "8 luồng (Tối đa)",
+        "en": "8 threads (High Speed)",
+        "vi": "8 luồng (Tốc độ cao)",
+    },
+    "thread_opt_12": {
+        "en": "12 threads (1Gbps Fiber)",
+        "vi": "12 luồng (Mạng 1Gbps)",
+    },
+    "thread_opt_16": {
+        "en": "16 threads (Ultra Multi-Core)",
+        "vi": "16 luồng (Đa nhân cực đại)",
     },
 
     # Progress & Status Bar

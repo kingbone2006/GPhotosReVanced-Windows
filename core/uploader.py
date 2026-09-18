@@ -16,6 +16,10 @@ import gpmc
 from gpmc.client import UploadProgressEvent
 import mimetypes
 from .db import UploadDatabase
+from .network_optimizer import apply_network_optimizations
+from .hash_pool import MultiCoreHashPool
+
+apply_network_optimizations()
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".3gp", ".mts"
@@ -707,7 +711,7 @@ class PhotoUploader:
         self.db = db
         self.event_callback = event_callback
         self.log_callback = log_callback or log_func
-        self.threads = max(1, min(threads, 10))
+        self.threads = max(1, min(threads, 16))
         self.quality = quality  # "original" (Pixel XL Unlimited) or "saver"
         self.auto_album = auto_album
         self.sync_roots = [str(r) for r in (sync_roots or []) if r]
@@ -872,7 +876,7 @@ class PhotoUploader:
         if quality is not None:
             self.quality = quality
         if threads is not None:
-            self.threads = max(1, min(threads, 10))
+            self.threads = max(1, min(threads, 16))
         if auto_album is not None:
             self.auto_album = auto_album
         if sync_roots is not None:
